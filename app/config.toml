@@ -1,0 +1,47 @@
+# PhotoCull developer config. The user never needs to edit this file;
+# settings are exposed in the app window. All values are STARTING POINTS,
+# to be tuned on real photos.
+
+[grouping]
+group_gap_seconds = 2.0      # new group when the gap between frames exceeds this
+max_group_size = 12          # long bursts are split into chunks of this size
+keep_alternates = 2          # 2nd/3rd best frames copied to Alternates
+
+[scoring.portrait]           # weights must be >= 0 and not all zero
+w_sharpness = 0.35
+w_exposure = 0.25
+w_eyes = 0.30
+w_contrast = 0.10
+
+[scoring.action]
+w_sharpness = 0.55
+w_exposure = 0.25
+w_eyes = 0.10
+w_contrast = 0.10
+
+[detection]
+analysis_max_side = 1280     # downscale before analysis (low-power PC)
+min_face_fraction = 0.08     # face height / frame height needed to judge eyes
+ear_closed_threshold = 0.20  # eye aspect ratio below this = closed
+target_brightness_low = 100
+target_brightness_high = 140
+max_blown_pct = 3.0
+max_crushed_pct = 10.0
+
+[exposure_correction]
+enabled = true
+target_brightness = 120
+max_stops = 1.0              # correction is capped at +/- this many stops
+tolerance = 8                # skip if already within this of the target
+
+[photoshop]
+styles_folder = "Styles"     # RELATIVE to the project root (next to app/), never absolute
+default_style_file = ""      # e.g. "MyLook.psd"; empty = ask in the UI
+default_action = ""          # optional Action run after the style; empty = None
+# manual fallback if .atn parsing fails:
+# styles = { Warm = "Warm", Cool = "Cool" }
+jpeg_quality = 92
+retry_attempts = 3
+
+[split]
+max_per_post = 20
