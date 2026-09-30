@@ -7,17 +7,25 @@ group_gap_seconds = 2.0      # new group when the gap between frames exceeds thi
 max_group_size = 12          # long bursts are split into chunks of this size
 keep_alternates = 2          # 2nd/3rd best frames copied to Alternates
 
+# Each frame gets 0-1 sub-scores, compared with the other frames of its burst.
+# total = weighted average of the sub-scores, minus penalties.
 [scoring.portrait]           # weights must be >= 0 and not all zero
 w_sharpness = 0.35
 w_exposure = 0.25
 w_eyes = 0.30
 w_contrast = 0.10
+closed_eyes_penalty = 0.30   # scaled by how many more eyes are open in the best frame
+blown_penalty = 0.15         # subject has more than max_blown_pct blown pixels
+crushed_penalty = 0.05       # subject has more than max_crushed_pct black pixels
 
 [scoring.action]
 w_sharpness = 0.55
 w_exposure = 0.25
 w_eyes = 0.10
 w_contrast = 0.10
+closed_eyes_penalty = 0.05   # relaxed: a blink matters less than a sharp moment
+blown_penalty = 0.15
+crushed_penalty = 0.05
 
 [detection]
 analysis_max_side = 1280     # downscale before analysis (low-power PC)
@@ -25,8 +33,15 @@ min_face_fraction = 0.08     # face height / frame height needed to judge eyes
 ear_closed_threshold = 0.20  # eye aspect ratio below this = closed
 target_brightness_low = 100
 target_brightness_high = 140
-max_blown_pct = 3.0
-max_crushed_pct = 10.0
+max_blown_pct = 3.0          # % of subject pixels >= 250
+max_crushed_pct = 10.0       # % of subject pixels <= 5
+face_confidence = 0.6        # face detector confidence (lower finds more, and more false faces)
+max_eye_faces = 12           # judge eyes on at most this many faces per photo (speed)
+blurry_sharpness = 30.0      # "blurry" below this Laplacian variance (at analysis size)...
+blurry_relative = 0.5        # ...or below this fraction of the sharpest frame in the burst
+min_contrast = 25.0          # "low_contrast" below this brightness std
+exposure_falloff = 60.0      # exposure sub-score reaches 0 this far outside the target band
+exposure_flag_margin = 30.0  # "over/underexposed" when this far outside the target band
 
 [exposure_correction]
 enabled = true

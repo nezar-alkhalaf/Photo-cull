@@ -1,3 +1,9 @@
 # Pinned runtime dependencies (added stage by stage).
 Pillow==12.3.0
+numpy==2.5.3
+# MediaPipe 1.0.x has only the Tasks API (no mp.solutions); faces.py is written for it.
+# It pulls in opencv-contrib-python, which also provides the YuNet face detector.
+# Do NOT also install opencv-python / opencv-python-headless: two cv2 packages clash.
+mediapipe==1.0.1
+opencv-contrib-python==5.0.0.93
 pytest>=8,<9

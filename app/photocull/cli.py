@@ -11,7 +11,6 @@ from .logsetup import setup_logging
 from .paths import CoverageLayout, SafetyError, preflight
 
 NOT_YET = {
-    "cull": "Stage 3",
     "edit": "Stage 4",
     "all": "Stage 5",
     "doctor": "Stage 6",
@@ -37,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("folder", help="main coverage folder (contains Full_Coverage)")
         if name in ("cull", "edit", "split"):
             sp.add_argument("--input", help="override the input folder for this step")
+        if name == "cull":
+            sp.add_argument("--mode", choices=["portrait", "action"], default="portrait",
+                            help="portrait/class (eyes matter) or action/match (sharpness matters)")
+            sp.add_argument("--existing", choices=["ask", "clear"], default="ask",
+                            help="what to do if Selected/Alternates already have photos")
         if name == "split":
             sp.add_argument("--max-per-post", type=int, help="max photos per post (default from config)")
             sp.add_argument("--existing", choices=["ask", "clear", "new"], default="ask",
@@ -44,7 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _utf8_output() -> None:
+    """Arabic folder names must not crash print() when output is redirected (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and not stream.isatty():
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
@@ -73,10 +85,36 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "split":
         return _cmd_split(args, cfg)
+    if args.command == "cull":
+        return _cmd_cull(args, cfg)
 
     print(f"'{args.command}' is not implemented yet (planned for {NOT_YET[args.command]}).",
           file=sys.stderr)
     return 3
+
+
+def _print_progress(done: int, total: int, name: str) -> None:
+    if name and (done % 25 == 0 or done == total - 1):
+        print(f"  {done + 1}/{total} {name}", flush=True)
+
+
+def _cmd_cull(args, cfg) -> int:
+    from .cull import run_cull
+
+    layout = CoverageLayout.for_main(args.folder)
+    if not layout.main.is_dir():
+        print(f"Main folder does not exist: {layout.main}", file=sys.stderr)
+        return 1
+    setup_logging(layout.log, console=False)
+    res = run_cull(layout, cfg, args.mode, args.input, args.existing,
+                   progress_cb=_print_progress, log_cb=lambda m: print(m))
+    print(res.message, file=sys.stderr if not res.ok else sys.stdout)
+    if res.data.get("needs_decision"):
+        print("Re-run with --existing clear to replace them with the new picks.",
+              file=sys.stderr)
+    elif res.ok:
+        print(f"Report: {layout.report}")
+    return 0 if res.ok else 1
 
 
 def _cmd_split(args, cfg) -> int:

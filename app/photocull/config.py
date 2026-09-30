@@ -27,17 +27,21 @@ class Grouping:
 
 @dataclass
 class Weights:
+    """Weights and penalties of one scoring mode (portrait or action)."""
     w_sharpness: float = 0.35
     w_exposure: float = 0.25
     w_eyes: float = 0.30
     w_contrast: float = 0.10
+    closed_eyes_penalty: float = 0.30
+    blown_penalty: float = 0.15
+    crushed_penalty: float = 0.05
 
 
 @dataclass
 class Scoring:
     portrait: Weights = field(default_factory=Weights)
     action: Weights = field(
-        default_factory=lambda: Weights(0.55, 0.25, 0.10, 0.10)
+        default_factory=lambda: Weights(0.55, 0.25, 0.10, 0.10, closed_eyes_penalty=0.05)
     )
 
 
@@ -50,6 +54,13 @@ class Detection:
     target_brightness_high: float = 140
     max_blown_pct: float = 3.0
     max_crushed_pct: float = 10.0
+    face_confidence: float = 0.6
+    max_eye_faces: int = 12
+    blurry_sharpness: float = 30.0
+    blurry_relative: float = 0.5
+    min_contrast: float = 25.0
+    exposure_falloff: float = 60.0
+    exposure_flag_margin: float = 30.0
 
 
 @dataclass
@@ -129,7 +140,7 @@ def validate(cfg: Config) -> Config:
         w = getattr(cfg.scoring, name)
         vals = [w.w_sharpness, w.w_exposure, w.w_eyes, w.w_contrast]
         for f in fields(w):
-            _num(f"scoring.{name}", f.name, getattr(w, f.name), lo=0)
+            _num(f"scoring.{name}", f.name, getattr(w, f.name), lo=0, hi=10)
         if sum(vals) <= 0:
             raise ConfigError(f"[scoring.{name}] weights must not all be zero")
 
@@ -143,6 +154,13 @@ def validate(cfg: Config) -> Config:
         raise ConfigError("[detection] target_brightness_low must be <= target_brightness_high")
     _num("detection", "max_blown_pct", d.max_blown_pct, lo=0, hi=100)
     _num("detection", "max_crushed_pct", d.max_crushed_pct, lo=0, hi=100)
+    _num("detection", "face_confidence", d.face_confidence, lo=0.05, hi=1)
+    _num("detection", "max_eye_faces", d.max_eye_faces, lo=0, integer=True)
+    _num("detection", "blurry_sharpness", d.blurry_sharpness, lo=0)
+    _num("detection", "blurry_relative", d.blurry_relative, lo=0, hi=1)
+    _num("detection", "min_contrast", d.min_contrast, lo=0, hi=255)
+    _num("detection", "exposure_falloff", d.exposure_falloff, lo=1, hi=255)
+    _num("detection", "exposure_flag_margin", d.exposure_flag_margin, lo=0, hi=255)
 
     e = cfg.exposure_correction
     if not isinstance(e.enabled, bool):

@@ -129,12 +129,21 @@ def relative_name(path: Path | str, main: Path | str) -> str:
     return Path(path).resolve().relative_to(Path(main).resolve()).as_posix()
 
 
-def preflight(layout: CoverageLayout, needed_bytes: int = 0) -> list[str]:
+def state_key(path: Path | str, main: Path | str) -> str:
+    """relative_name() when path is inside the coverage folder, else the absolute path."""
+    try:
+        return relative_name(path, main)
+    except ValueError:
+        return Path(path).resolve().as_posix()
+
+
+def preflight(layout: CoverageLayout, needed_bytes: int = 0,
+              need_full_coverage: bool = True) -> list[str]:
     """Return a list of problems (empty = OK): folders, write access, free space."""
     problems: list[str] = []
     if not layout.main.is_dir():
         return [f"Main folder does not exist: {layout.main}"]
-    if not layout.full_coverage.is_dir():
+    if need_full_coverage and not layout.full_coverage.is_dir():
         problems.append("Full_Coverage folder is missing.")
     if not os.access(layout.main, os.W_OK):
         problems.append(f"No write permission in {layout.main}")
