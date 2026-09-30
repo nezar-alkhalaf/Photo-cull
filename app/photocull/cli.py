@@ -13,7 +13,6 @@ from .paths import CoverageLayout, SafetyError, preflight
 NOT_YET = {
     "cull": "Stage 3",
     "edit": "Stage 4",
-    "split": "Stage 2",
     "all": "Stage 5",
     "doctor": "Stage 6",
 }
@@ -38,6 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("folder", help="main coverage folder (contains Full_Coverage)")
         if name in ("cull", "edit", "split"):
             sp.add_argument("--input", help="override the input folder for this step")
+        if name == "split":
+            sp.add_argument("--max-per-post", type=int, help="max photos per post (default from config)")
+            sp.add_argument("--existing", choices=["ask", "clear", "new"], default="ask",
+                            help="what to do if Posts/ already has Post_N folders")
     return p
 
 
@@ -68,6 +71,23 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(layout.log, console=True).info("Initialised %s", layout.main)
         return 0
 
+    if args.command == "split":
+        return _cmd_split(args, cfg)
+
     print(f"'{args.command}' is not implemented yet (planned for {NOT_YET[args.command]}).",
           file=sys.stderr)
     return 3
+
+
+def _cmd_split(args, cfg) -> int:
+    from .split import run_split
+
+    layout = CoverageLayout.for_main(args.folder)
+    setup_logging(layout.log, console=False)
+    res = run_split(layout, args.max_per_post or cfg.split.max_per_post,
+                    args.input, args.existing, log_cb=lambda m: print(m))
+    print(res.message, file=sys.stderr if not res.ok else sys.stdout)
+    if res.data.get("needs_decision"):
+        print("Re-run with --existing clear (delete old Post_N folders) "
+              "or --existing new (add new numbered folders).", file=sys.stderr)
+    return 0 if res.ok else 1
