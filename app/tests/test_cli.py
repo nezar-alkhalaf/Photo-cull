@@ -33,3 +33,11 @@ def test_init_without_full_coverage_fails_cleanly(tmp_path):
 
 def test_stub_commands_exit_3():
     assert run("all", ".").returncode == 3
+
+
+def test_edit_exposure_switch():
+    from photocull.cli import build_parser
+    p = build_parser()
+    assert p.parse_args(["edit", "x"]).exposure is None            # config default
+    assert p.parse_args(["edit", "x", "--exposure"]).exposure is True
+    assert p.parse_args(["edit", "x", "--no-exposure"]).exposure is False

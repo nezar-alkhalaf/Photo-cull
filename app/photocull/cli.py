@@ -43,8 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "edit":
             sp.add_argument("--style", help="style .psd (file name in Styles/ or a full path)")
             sp.add_argument("--action", help='optional action after the style: "Set name/Action name"')
-            sp.add_argument("--no-exposure", action="store_true",
-                            help="skip the automatic exposure fix")
+            exp = sp.add_mutually_exclusive_group()
+            exp.add_argument("--exposure", dest="exposure", action="store_const", const=True,
+                             help="fix exposure before Photoshop (good for dark match photos)")
+            exp.add_argument("--no-exposure", dest="exposure", action="store_const", const=False,
+                             help="send photos to Photoshop as shot (good for studio)")
             sp.add_argument("--preview", type=int, default=0, metavar="N",
                             help="edit only N photos, then stop so you can check them")
             sp.add_argument("--existing", choices=["ask", "reprocess"], default="ask",
@@ -148,7 +151,7 @@ def _cmd_edit(args, cfg) -> int:
     setup_logging(layout.log, console=False)
     print("Connecting to Photoshop (can take 30 s if it is closed)...", flush=True)
     res = run_edit(layout, cfg, args.style, action, args.input,
-                   False if args.no_exposure else None, args.preview, args.existing,
+                   args.exposure, args.preview, args.existing,
                    progress_cb=_print_progress, log_cb=lambda m: print(m))
     print(res.message, file=sys.stdout if res.ok or res.data.get("preview_done") else sys.stderr)
     if res.data.get("needs_decision"):

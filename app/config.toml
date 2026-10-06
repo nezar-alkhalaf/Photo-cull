@@ -50,7 +50,7 @@ exposure_falloff = 60.0      # exposure sub-score reaches 0 this far outside the
 exposure_flag_margin = 30.0  # "over/underexposed" when this far outside the target band
 
 [exposure_correction]
-enabled = true
+enabled = true               # default only: the user switches it per run (studio: off, night matches: on)
 target_brightness = 120
 max_stops = 1.0              # correction is capped at +/- this many stops
 tolerance = 8                # skip if already within this of the target
