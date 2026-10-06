@@ -20,9 +20,11 @@ class ConfigError(ValueError):
 
 @dataclass
 class Grouping:
-    group_gap_seconds: float = 2.0
+    group_gap_seconds: float = 2.0          # portrait mode
+    action_group_gap_seconds: float = 0.6   # action mode
     max_group_size: int = 12
     keep_alternates: int = 2
+    skip_blurry_groups: bool = True
 
 
 @dataclass
@@ -134,8 +136,11 @@ def _num(where: str, name: str, value: Any, lo: float | None = None,
 def validate(cfg: Config) -> Config:
     g = cfg.grouping
     _num("grouping", "group_gap_seconds", g.group_gap_seconds, lo=0.05)
+    _num("grouping", "action_group_gap_seconds", g.action_group_gap_seconds, lo=0.05)
     _num("grouping", "max_group_size", g.max_group_size, lo=1, integer=True)
     _num("grouping", "keep_alternates", g.keep_alternates, lo=0, integer=True)
+    if not isinstance(g.skip_blurry_groups, bool):
+        raise ConfigError("[grouping] skip_blurry_groups must be true or false")
 
     for name in ("portrait", "action"):
         w = getattr(cfg.scoring, name)

@@ -10,7 +10,8 @@ from pathlib import Path
 COLUMNS = ["filename", "capture_time", "group_id", "group_size", "rank_in_group",
            "sharpness", "mean_brightness", "blown_pct", "crushed_pct", "contrast",
            "face_found", "eyes_state", "total_score", "result", "reasons", "weak_group"]
-RESULTS = ("selected", "alternate", "not_selected", "unreadable")
+RESULTS = ("selected", "alternate", "not_selected", "skipped", "unreadable")
+# skipped = best frame of a group that was dropped because even it is blurry
 
 
 def write_report(path: Path | str, rows: list[dict]) -> None:

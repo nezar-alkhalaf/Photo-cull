@@ -192,20 +192,27 @@ def _score_and_copy(layout, cfg, mode, input_dir, existing, old, an: _Analysis,
 
     readable = [(p, t, m) for p, t, m in an.items if m is not None]
     groups = group_by_gap(readable, [t for _, t, _ in readable],
-                          g.group_gap_seconds, g.max_group_size)
+                          g.action_group_gap_seconds if mode == "action"
+                          else g.group_gap_seconds, g.max_group_size)
     rows: dict[Path, dict] = {}
     picks: list[tuple[Path, Path]] = []            # (source, output folder)
-    weak_groups = 0
+    weak_groups = skipped_groups = 0
     for gid, grp in enumerate(groups, start=1):
         ms = [m for _, _, m in grp]
         scores = score_group(ms, wts, det)
         order = rank_group(ms, scores)
         weak = is_weak(ms[order[0]], scores[order[0]], det)
         weak_groups += weak
+        # User decision (overrides plan 6.4 "every group yields a Selected"):
+        # when even the sharpest frame is blurry, the moment is dropped.
+        skip = g.skip_blurry_groups and ms[order[0]].sharpness < det.blurry_sharpness
+        skipped_groups += skip
         for rank, idx in enumerate(order, start=1):
             p, t, m = grp[idx]
             s = scores[idx]
-            if rank == 1:
+            if skip:
+                result, dest = ("skipped" if rank == 1 else "not_selected"), None
+            elif rank == 1:
                 result, dest = "selected", layout.selected
             elif rank <= 1 + g.keep_alternates and m.sharpness >= det.blurry_sharpness:
                 # a black frame (flash did not fire) or a badly blurred one is
@@ -272,7 +279,7 @@ def _score_and_copy(layout, cfg, mode, input_dir, existing, old, an: _Analysis,
         "total": len(ordered_rows), "groups": len(groups),
         "selected": counts["selected"], "alternates": counts["alternate"],
         "not_selected": counts["not_selected"], "unreadable": counts["unreadable"],
-        "weak_groups": weak_groups,
+        "weak_groups": weak_groups, "skipped_groups": skipped_groups,
         "rejected_by_reason": {r: rejected[r] for r in REASONS},
     }
     ok = not errors and not cancelled
@@ -286,7 +293,9 @@ def _score_and_copy(layout, cfg, mode, input_dir, existing, old, an: _Analysis,
     msg = (f"{summary['total']} photos, {summary['groups']} groups: "
            f"{summary['selected']} selected, {summary['alternates']} alternates"
            + (f", {summary['unreadable']} unreadable" if summary["unreadable"] else "")
-           + (f", {weak_groups} weak group(s) to review" if weak_groups else "") + ".")
+           + (f", {skipped_groups} blurry group(s) skipped" if skipped_groups else "")
+           + (f", {weak_groups - skipped_groups} weak group(s) to review"
+              if weak_groups > skipped_groups else "") + ".")
     if cancelled:
         msg = f"Stopped while copying. {msg} Output is incomplete; run again."
     elif errors:

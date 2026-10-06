@@ -73,7 +73,8 @@ def test_portrait_cull_end_to_end(coverage):
     res = run_cull(lay, Config(), "portrait", detector=FakeDetector())
     assert res.ok, res.message
 
-    assert names(lay.selected) == ["B1_b.jpg", "B2_b.jpg", "B3_a.jpg"]
+    # burst 3 (flat grey) is skipped: even its best frame is blurry
+    assert names(lay.selected) == ["B1_b.jpg", "B2_b.jpg"]
     # badly blurred / flat frames never take an Alternates slot
     assert names(lay.alternates) == ["B1_c.jpg"]
     assert snapshot(lay.full_coverage) == before          # source untouched
@@ -89,12 +90,13 @@ def test_portrait_cull_end_to_end(coverage):
     assert "blurry" in rows["B1_d.jpg"]["reasons"].split(";")
     assert rows["B1_d.jpg"]["result"] == rows["B3_b.jpg"]["result"] == "not_selected"
     assert rows["B3_a.jpg"]["weak_group"] == "yes" and rows["B1_b.jpg"]["weak_group"] == "no"
+    assert rows["B3_a.jpg"]["result"] == "skipped" and rows["B3_b.jpg"]["result"] == "not_selected"
     assert rows["broken.jpg"]["result"] == "unreadable"
 
     s = res.data
     assert (s["total"], s["groups"], s["selected"], s["alternates"], s["unreadable"]) == \
-        (9, 3, 3, 1, 1)
-    assert s["weak_groups"] == 1
+        (9, 3, 2, 1, 1)
+    assert s["weak_groups"] == 1 and s["skipped_groups"] == 1
     assert s["rejected_by_reason"]["closed_eyes"] == 1
 
     state = json.loads(lay.state.read_text(encoding="utf-8"))
@@ -156,7 +158,7 @@ def test_stop_then_resume(coverage):
     res = run_cull(coverage, Config(), detector=fd2)
     assert res.ok
     assert fd2.calls == 5                          # 8 readable photos, 3 already measured
-    assert len(names(coverage.selected)) == 3
+    assert len(names(coverage.selected)) == 2
 
 
 def test_detection_params_change_invalidates_cache(coverage):
@@ -174,6 +176,23 @@ def test_gap_setting_changes_groups(coverage):
     cfg.grouping.group_gap_seconds = 30
     res = run_cull(coverage, cfg, detector=FakeDetector())
     assert res.data["groups"] == 1
+
+
+def test_action_mode_uses_its_own_gap(coverage):
+    cfg = Config()
+    cfg.grouping.action_group_gap_seconds = 0.4      # burst 1 frames are 0.5 s apart
+    fd = FakeDetector()
+    assert run_cull(coverage, cfg, "portrait", detector=fd).data["groups"] == 3
+    res = run_cull(coverage, cfg, "action", existing="clear", detector=fd)
+    assert res.data["groups"] == 6                   # burst 1 split into 4 moments
+
+
+def test_skipping_blurry_groups_can_be_turned_off(coverage):
+    cfg = Config()
+    cfg.grouping.skip_blurry_groups = False          # plan default: one pick per moment
+    res = run_cull(coverage, cfg, detector=FakeDetector())
+    assert res.data["skipped_groups"] == 0
+    assert names(coverage.selected) == ["B1_b.jpg", "B2_b.jpg", "B3_a.jpg"]
 
 
 def test_keep_alternates_zero(coverage):
@@ -211,10 +230,10 @@ def test_empty_and_bad_mode(tmp_path):
 
 def test_cli_cull(coverage):
     r = subprocess.run([sys.executable, "-m", "photocull", "cull", str(coverage.main),
-                        "--mode", "action"], cwd=APP, capture_output=True, text=True,
+                        "--mode", "portrait"], cwd=APP, capture_output=True, text=True,
                        encoding="utf-8")
     assert r.returncode == 0, r.stderr
-    assert coverage.report.exists() and len(names(coverage.selected)) == 3
+    assert coverage.report.exists() and len(names(coverage.selected)) == 2
     r = subprocess.run([sys.executable, "-m", "photocull", "cull", str(coverage.main)],
                        cwd=APP, capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 1 and "--existing clear" in r.stderr

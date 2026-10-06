@@ -3,9 +3,14 @@
 # to be tuned on real photos.
 
 [grouping]
-group_gap_seconds = 2.0      # new group when the gap between frames exceeds this
+group_gap_seconds = 2.0      # portrait: new group when the gap between frames exceeds this
+action_group_gap_seconds = 0.6  # action: frames of one shutter press are 0.12-0.3 s apart;
+                             # a gap over ~0.5 s is a new press = a new moment (match sample)
 max_group_size = 12          # long bursts are split into chunks of this size
 keep_alternates = 2          # 2nd/3rd best frames copied to Alternates
+skip_blurry_groups = true    # if even the sharpest frame of a moment is below
+                             # detection.blurry_sharpness, copy nothing (user's choice;
+                             # false = always pick one frame per moment, as in the plan)
 
 # Each frame gets 0-1 sub-scores, compared with the other frames of its burst.
 # total = weighted average of the sub-scores, minus penalties.
