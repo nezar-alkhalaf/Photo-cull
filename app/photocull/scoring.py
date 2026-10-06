@@ -29,6 +29,7 @@ class FaceInfo:
     height_frac: float                    # face box height / frame height
     ear_left: float | None = None
     ear_right: float | None = None
+    sharpness: float | None = None        # Laplacian variance inside the face box
 
     @property
     def ear(self) -> float | None:
@@ -39,13 +40,13 @@ class FaceInfo:
 
 @dataclass
 class Measurement:
-    sharpness: float                      # Laplacian variance over the subject region
-    mean_brightness: float                # centre-weighted, 0-255
-    blown_pct: float                      # % of subject pixels >= 250
-    crushed_pct: float                    # % of subject pixels <= 5
+    sharpness: float                      # sharpest main face, else the frame centre
+    mean_brightness: float                # of the main faces, else centre-weighted frame
+    blown_pct: float                      # % of face (else centre) pixels >= 250
+    crushed_pct: float                    # % of face (else centre) pixels <= 5
     contrast: float                       # std of brightness, whole frame
     face_count: int = 0
-    faces: list[FaceInfo] = field(default_factory=list)   # faces whose eyes were judged
+    faces: list[FaceInfo] = field(default_factory=list)   # main faces + eye-judged faces
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -97,28 +98,75 @@ def _centre_weights(h: int, w: int) -> np.ndarray:
     return np.outer(gy, gx)
 
 
+def _lap_var(gray: np.ndarray, x0: int, y0: int, x1: int, y1: int, min_side: int = 0) -> float:
+    """Laplacian variance of a box (grown to min_side if smaller)."""
+    h, w = gray.shape
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    hw, hh = max((x1 - x0) / 2, min_side / 2), max((y1 - y0) / 2, min_side / 2)
+    x0, x1 = int(max(0, cx - hw)), int(min(w, cx + hw))
+    y0, y1 = int(max(0, cy - hh)), int(min(h, cy + hh))
+    # A light blur first so high-ISO noise does not read as detail.
+    return float(cv2.Laplacian(cv2.GaussianBlur(gray[y0:y1, x0:x1], (3, 3), 0),
+                               cv2.CV_64F).var())
+
+
 def measure(rgb: np.ndarray, detector: FaceDetector, det: Detection) -> Measurement:
+    """Raw numbers for one photo.
+
+    With faces, sharpness = the SHARPEST of the main faces (>= half the
+    largest face's height): the face the camera focused on. Out-of-focus
+    people behind the subject must not drag the value down.
+    """
     h, w = rgb.shape[:2]
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     faces = detector.detect(rgb, max(1, math.ceil(det.min_face_fraction * h)))
 
     x0, y0, x1, y1 = subject_region(faces, w, h)
     region = gray[y0:y1, x0:x1]
-    # A light blur first so high-ISO noise does not read as detail.
-    lap = cv2.Laplacian(cv2.GaussianBlur(region, (3, 3), 0), cv2.CV_64F)
     wts = _centre_weights(h, w)
+    mean_brightness = float((gray * wts).sum() / wts.sum())
+
+    infos: list[FaceInfo] = []
+    if faces:
+        largest = max(f.box[3] for f in faces)
+        min_side = max(24, int(0.05 * min(w, h)))
+        main_sharp = []
+        # Exposure is judged on the faces: a white studio wall or a dark hall
+        # must not make a correctly exposed person look over/underexposed.
+        # Inner 70% of each box keeps hair and background out.
+        skin = []
+        for f in faces:
+            if f.box[3] >= 0.5 * largest:
+                x, y, fw, fh = f.box
+                skin.append(gray[y + int(0.15 * fh):y + int(0.85 * fh),
+                                 x + int(0.15 * fw):x + int(0.85 * fw)].ravel())
+        region = np.concatenate(skin)
+        if region.size:
+            mean_brightness = float(region.mean())
+        for f in faces:
+            is_main = f.box[3] >= 0.5 * largest
+            if not is_main and f.ear is None:
+                continue
+            x, y, fw, fh = f.box
+            fs = _lap_var(gray, x, y, x + fw, y + fh, min_side)
+            if is_main:
+                main_sharp.append(fs)
+            infos.append(FaceInfo(round(fh / h, 4),
+                                  None if f.ear_left is None else round(f.ear_left, 4),
+                                  None if f.ear_right is None else round(f.ear_right, 4),
+                                  round(fs, 3)))
+        sharpness = max(main_sharp)
+    else:
+        sharpness = _lap_var(gray, x0, y0, x1, y1)
 
     return Measurement(
-        sharpness=round(float(lap.var()), 3),
-        mean_brightness=round(float((gray * wts).sum() / wts.sum()), 3),
+        sharpness=round(sharpness, 3),
+        mean_brightness=round(mean_brightness, 3),
         blown_pct=round(float((region >= 250).mean() * 100), 3),
         crushed_pct=round(float((region <= 5).mean() * 100), 3),
         contrast=round(float(gray.std()), 3),
         face_count=len(faces),
-        faces=[FaceInfo(round(f.box[3] / h, 4),
-                        None if f.ear_left is None else round(f.ear_left, 4),
-                        None if f.ear_right is None else round(f.ear_right, 4))
-               for f in faces if f.ear is not None],
+        faces=infos,
     )
 
 
@@ -132,11 +180,19 @@ class Score:
     sub: dict[str, float]
 
 
-def eyes_open_fraction(m: Measurement, ear_threshold: float) -> float | None:
-    judged = [f.ear for f in m.faces if f.ear is not None]
+def eyes_open_fraction(m: Measurement, det: Detection) -> float | None:
+    """Share of in-focus judged faces with open eyes (None = nobody judged).
+
+    A face counts only if it is at least eye_focus_ratio as sharp as the
+    sharpest face: a blurred person in the background blinking or smiling
+    does not spoil the shot."""
+    top = max((f.sharpness for f in m.faces if f.sharpness is not None), default=None)
+    judged = [f.ear for f in m.faces if f.ear is not None
+              and (top is None or f.sharpness is None
+                   or f.sharpness >= det.eye_focus_ratio * top)]
     if not judged:
         return None
-    return sum(e >= ear_threshold for e in judged) / len(judged)
+    return sum(e >= det.ear_closed_threshold for e in judged) / len(judged)
 
 
 def exposure_score(mean: float, det: Detection) -> float:
@@ -178,7 +234,7 @@ def score_group(ms: list[Measurement], wts: Weights, det: Detection) -> list[Sco
     rmax = max(root) or 1.0
     cmax = max(m.contrast for m in ms) or 1.0
     smax = max(m.sharpness for m in ms)
-    eyes = [eyes_open_fraction(m, det.ear_closed_threshold) for m in ms]
+    eyes = [eyes_open_fraction(m, det) for m in ms]
     best_eyes = max((e for e in eyes if e is not None), default=None)
     wsum = wts.w_sharpness + wts.w_exposure + wts.w_eyes + wts.w_contrast
 
@@ -210,9 +266,13 @@ def is_weak(m: Measurement, s: Score, det: Detection) -> bool:
     """The best frame of a group still has a real problem: flag the group for review.
 
     Uses absolute blur only; "blurry compared with a sharper frame that has
-    closed eyes" is a normal trade-off, not a weak group."""
+    closed eyes" is a normal trade-off, not a weak group.
+    Closed eyes do not count: if the best frame still has them, every frame
+    does, and that is usually someone looking down on purpose (signing a
+    contract), which the photographer accepts. The report still says
+    closed_eyes."""
     return (m.sharpness < det.blurry_sharpness
-            or bool({"closed_eyes", "overexposed", "underexposed"} & set(s.reasons)))
+            or bool({"overexposed", "underexposed"} & set(s.reasons)))
 
 
 def rank_group(ms: list[Measurement], scores: list[Score]) -> list[int]:

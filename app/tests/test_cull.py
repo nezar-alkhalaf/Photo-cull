@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -57,6 +58,8 @@ def coverage(tmp_path):
         save_jpeg(fc / f"{name}.jpg", flat(128), t)
         t += timedelta(seconds=1)
     (fc / "broken.jpg").write_bytes(b"\xff\xd8\xff not really a jpeg")
+    old = (T0 - timedelta(days=1)).timestamp()     # no EXIF: file date makes it the oldest
+    os.utime(fc / "broken.jpg", (old, old))
     return lay
 
 
@@ -71,7 +74,8 @@ def test_portrait_cull_end_to_end(coverage):
     assert res.ok, res.message
 
     assert names(lay.selected) == ["B1_b.jpg", "B2_b.jpg", "B3_a.jpg"]
-    assert names(lay.alternates) == ["B1_c.jpg", "B1_d.jpg", "B2_a.jpg", "B3_b.jpg"]
+    # badly blurred / flat frames never take an Alternates slot
+    assert names(lay.alternates) == ["B1_c.jpg"]
     assert snapshot(lay.full_coverage) == before          # source untouched
 
     rows = rows_by_name(lay)
@@ -83,12 +87,13 @@ def test_portrait_cull_end_to_end(coverage):
     assert rows["B1_a.jpg"]["reasons"].split(";") == ["closed_eyes", "not_best_in_group"]
     assert rows["B1_a.jpg"]["group_size"] == "4" and rows["B1_a.jpg"]["rank_in_group"] == "4"
     assert "blurry" in rows["B1_d.jpg"]["reasons"].split(";")
+    assert rows["B1_d.jpg"]["result"] == rows["B3_b.jpg"]["result"] == "not_selected"
     assert rows["B3_a.jpg"]["weak_group"] == "yes" and rows["B1_b.jpg"]["weak_group"] == "no"
     assert rows["broken.jpg"]["result"] == "unreadable"
 
     s = res.data
     assert (s["total"], s["groups"], s["selected"], s["alternates"], s["unreadable"]) == \
-        (9, 3, 3, 4, 1)
+        (9, 3, 3, 1, 1)
     assert s["weak_groups"] == 1
     assert s["rejected_by_reason"]["closed_eyes"] == 1
 

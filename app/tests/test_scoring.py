@@ -54,7 +54,7 @@ def test_small_face_not_judged_for_eyes():
     cfg = Config()
     cfg.detection.min_face_fraction = 0.9            # face box is 200/480 = 0.42
     res = measure(with_eyes(texture(), "closed"), FakeDetector(), cfg.detection)
-    assert res.face_count == 1 and res.faces == []
+    assert res.face_count == 1 and [f.ear for f in res.faces] == [None]
 
 
 def test_subject_region():
@@ -94,10 +94,10 @@ def test_analysis_image_downscaled_and_upright(tmp_path):
 
 def test_exposure_score_band():
     assert exposure_score(120, DET) == 1
-    assert exposure_score(100, DET) == 1
-    assert exposure_score(70, DET) == pytest.approx(0.5)
-    assert exposure_score(20, DET) == 0
-    assert exposure_score(200, DET) == 0
+    assert exposure_score(70, DET) == 1
+    assert exposure_score(40, DET) == pytest.approx(0.5)
+    assert exposure_score(5, DET) == 0
+    assert exposure_score(240, DET) == 0
 
 
 def test_sharpest_wins_in_action_mode():
@@ -151,7 +151,7 @@ def test_blown_highlights_penalised():
 
 @pytest.mark.parametrize("kw,reason", [
     (dict(sharp=5), "blurry"),
-    (dict(mean=40), "underexposed"),
+    (dict(mean=30), "underexposed"),
     (dict(crushed=50), "underexposed"),
     (dict(mean=220), "overexposed"),
     (dict(contrast=10), "low_contrast"),
@@ -170,3 +170,32 @@ def test_zero_weight_metric_is_ignored():
     w = Weights(1, 0, 0, 0, 0, 0, 0)
     ms = [m(sharp=900, mean=20), m(sharp=100)]
     assert rank_group(ms, score_group(ms, w, DET))[0] == 0
+
+
+# ---------- in-focus subject (found on the user's first sample folder) ----------
+
+class TwoFaces:
+    """Sharp subject on the left, out-of-focus person on the right with closed eyes."""
+    name = "two"
+
+    def detect(self, rgb, min_eye_face_px):
+        return [Face((40, 120, 200, 240), 1.0, 0.3, 0.3),
+                Face((420, 160, 150, 180), 1.0, 0.1, 0.1)]
+
+
+def test_sharpness_is_the_sharpest_face_and_blurred_faces_dont_blink():
+    img = texture()
+    img[:, 320:] = blurred(img, 4)[:, 320:]           # right half out of focus
+    res = m_of(img, TwoFaces())
+    left_only = m_of(img[:, :320].copy())             # centre of the sharp half
+    assert res.sharpness > 0.5 * left_only.sharpness
+    assert [f.sharpness > 5 * res.faces[1].sharpness for f in res.faces[:1]] == [True]
+    s = score_group([res], CFG.scoring.portrait, DET)[0]
+    assert s.eyes_state == "open" and "closed_eyes" not in s.reasons
+
+
+def test_in_focus_blink_still_counts():
+    x = Measurement(400, 120, 0, 0, 60, 2, [FaceInfo(0.3, 0.3, 0.3, 400),
+                                            FaceInfo(0.3, 0.1, 0.1, 380)])
+    [s] = score_group([x], CFG.scoring.portrait, DET)
+    assert s.eyes_state == "closed"

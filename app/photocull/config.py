@@ -49,14 +49,15 @@ class Scoring:
 class Detection:
     analysis_max_side: int = 1280
     min_face_fraction: float = 0.08
-    ear_closed_threshold: float = 0.20
-    target_brightness_low: float = 100
-    target_brightness_high: float = 140
+    ear_closed_threshold: float = 0.16
+    eye_focus_ratio: float = 0.5
+    target_brightness_low: float = 70
+    target_brightness_high: float = 170
     max_blown_pct: float = 3.0
     max_crushed_pct: float = 10.0
     face_confidence: float = 0.6
     max_eye_faces: int = 12
-    blurry_sharpness: float = 30.0
+    blurry_sharpness: float = 15.0
     blurry_relative: float = 0.5
     min_contrast: float = 25.0
     exposure_falloff: float = 60.0
@@ -148,6 +149,7 @@ def validate(cfg: Config) -> Config:
     _num("detection", "analysis_max_side", d.analysis_max_side, lo=64, integer=True)
     _num("detection", "min_face_fraction", d.min_face_fraction, lo=0, hi=1)
     _num("detection", "ear_closed_threshold", d.ear_closed_threshold, lo=0, hi=1)
+    _num("detection", "eye_focus_ratio", d.eye_focus_ratio, lo=0, hi=1)
     _num("detection", "target_brightness_low", d.target_brightness_low, lo=0, hi=255)
     _num("detection", "target_brightness_high", d.target_brightness_high, lo=0, hi=255)
     if d.target_brightness_low > d.target_brightness_high:

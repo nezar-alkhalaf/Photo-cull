@@ -33,6 +33,7 @@ from .scoring import (MODES, REASONS, Measurement, is_weak, load_analysis_image,
 from .state import State
 
 SAVE_EVERY = 10
+MEASURE_VERSION = 3          # bump when measure() changes, to drop cached measurements
 
 
 def _say(log_cb: LogCb, msg: str, level: int = logging.INFO) -> None:
@@ -116,7 +117,8 @@ class _Analysis:
 
 def _analyse(layout, cfg, src, files, detector, progress_cb, log_cb, cancel):
     det = cfg.detection
-    params = {"input": state_key(src, layout.main), "detector": detector.name,
+    params = {"measure_version": MEASURE_VERSION,
+              "input": state_key(src, layout.main), "detector": detector.name,
               "analysis_max_side": det.analysis_max_side,
               "min_face_fraction": det.min_face_fraction,
               "face_confidence": det.face_confidence, "max_eye_faces": det.max_eye_faces}
@@ -205,7 +207,9 @@ def _score_and_copy(layout, cfg, mode, input_dir, existing, old, an: _Analysis,
             s = scores[idx]
             if rank == 1:
                 result, dest = "selected", layout.selected
-            elif rank <= 1 + g.keep_alternates:
+            elif rank <= 1 + g.keep_alternates and m.sharpness >= det.blurry_sharpness:
+                # a black frame (flash did not fire) or a badly blurred one is
+                # never worth an Alternates slot
                 result, dest = "alternate", layout.alternates
             else:
                 result, dest = "not_selected", None
