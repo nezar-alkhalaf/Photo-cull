@@ -11,7 +11,6 @@ from .logsetup import setup_logging
 from .paths import CoverageLayout, SafetyError, preflight
 
 NOT_YET = {
-    "edit": "Stage 4",
     "all": "Stage 5",
     "doctor": "Stage 6",
 }
@@ -41,6 +40,15 @@ def build_parser() -> argparse.ArgumentParser:
                             help="portrait/class (eyes matter) or action/match (sharpness matters)")
             sp.add_argument("--existing", choices=["ask", "clear"], default="ask",
                             help="what to do if Selected/Alternates already have photos")
+        if name == "edit":
+            sp.add_argument("--style", help="style .psd (file name in Styles/ or a full path)")
+            sp.add_argument("--action", help='optional action after the style: "Set name/Action name"')
+            sp.add_argument("--no-exposure", action="store_true",
+                            help="skip the automatic exposure fix")
+            sp.add_argument("--preview", type=int, default=0, metavar="N",
+                            help="edit only N photos, then stop so you can check them")
+            sp.add_argument("--existing", choices=["ask", "reprocess"], default="ask",
+                            help="what to do if photos were edited before with other settings")
         if name == "split":
             sp.add_argument("--max-per-post", type=int, help="max photos per post (default from config)")
             sp.add_argument("--existing", choices=["ask", "clear", "new"], default="ask",
@@ -87,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_split(args, cfg)
     if args.command == "cull":
         return _cmd_cull(args, cfg)
+    if args.command == "edit":
+        return _cmd_edit(args, cfg)
 
     print(f"'{args.command}' is not implemented yet (planned for {NOT_YET[args.command]}).",
           file=sys.stderr)
@@ -115,6 +125,36 @@ def _cmd_cull(args, cfg) -> int:
     elif res.ok:
         print(f"Report: {layout.report}")
     return 0 if res.ok else 1
+
+
+def _cmd_edit(args, cfg) -> int:
+    from .edit import parse_action, run_edit
+    from .styles import list_styles
+
+    layout = CoverageLayout.for_main(args.folder)
+    if not layout.main.is_dir():
+        print(f"Main folder does not exist: {layout.main}", file=sys.stderr)
+        return 1
+    if not (args.style or cfg.photoshop.default_style_file):
+        names = [p.name for p in list_styles(cfg)]
+        print("Choose a style with --style. In the Styles folder: "
+              + (", ".join(names) if names else "(no .psd files yet)"), file=sys.stderr)
+        return 1
+    try:
+        action = parse_action(args.action or cfg.photoshop.default_action)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    setup_logging(layout.log, console=False)
+    print("Connecting to Photoshop (can take 30 s if it is closed)...", flush=True)
+    res = run_edit(layout, cfg, args.style, action, args.input,
+                   False if args.no_exposure else None, args.preview, args.existing,
+                   progress_cb=_print_progress, log_cb=lambda m: print(m))
+    print(res.message, file=sys.stdout if res.ok or res.data.get("preview_done") else sys.stderr)
+    if res.data.get("needs_decision"):
+        print("Re-run with --existing reprocess to edit them again with the new settings.",
+              file=sys.stderr)
+    return 0 if res.ok or res.data.get("preview_done") else 1
 
 
 def _cmd_split(args, cfg) -> int:

@@ -32,4 +32,4 @@ def test_init_without_full_coverage_fails_cleanly(tmp_path):
 
 
 def test_stub_commands_exit_3():
-    assert run("edit", ".").returncode == 3
+    assert run("all", ".").returncode == 3
