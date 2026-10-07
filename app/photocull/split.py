@@ -7,12 +7,18 @@ import shutil
 from pathlib import Path
 
 from .exif_utils import sort_by_capture_time
+from .logsetup import get_logger
 from .paths import (CoverageLayout, SafetyError, check_output_safe, list_jpegs,
                     relative_name, safe_copy)
 from .runner import CancelToken, LogCb, ProgressCb, StepResult, noop_log, noop_progress
 from .state import State
 
 POST_RE = re.compile(r"^Post_(\d+)$")
+
+
+def _say(log_cb: LogCb, msg: str) -> None:
+    get_logger().info(msg)
+    log_cb(msg)
 
 
 def distribute(total: int, max_per_post: int) -> list[int]:
@@ -83,12 +89,12 @@ def run_split(layout: CoverageLayout, max_per_post: int = 20,
 
     files, missing = sort_by_capture_time(files)
     if missing:
-        log_cb(f"Warning: {missing} file(s) have no EXIF time; using file date.")
+        _say(log_cb, f"Warning: {missing} file(s) have no EXIF time; using file date.")
 
     if old and existing == "clear":
         for p in old:
             shutil.rmtree(p)
-            log_cb(f"Removed old {p.name}")
+            _say(log_cb, f"Removed old {p.name}")
         start = 1
     elif old:
         start = int(POST_RE.match(old[-1].name).group(1)) + 1
@@ -116,13 +122,13 @@ def run_split(layout: CoverageLayout, max_per_post: int = 20,
             progress_cb(done, total, f.name)
             try:
                 dst = safe_copy(f, folder, layout)
-                log_cb(f"Copied {f.name} -> {relative_name(dst, layout.main)}")
+                _say(log_cb, f"Copied {f.name} -> {relative_name(dst, layout.main)}")
                 state.mark_done("split", relative_name(dst, layout.main))
                 copied += 1
             except Exception as exc:
                 errors.append(f"{f.name}: {exc}")
                 state.mark_failed("split", f.name, str(exc))
-                log_cb(f"ERROR copying {f.name}: {exc}")
+                _say(log_cb, f"ERROR copying {f.name}: {exc}")
             done += 1
         sizes.append(copied)
         if cancelled:

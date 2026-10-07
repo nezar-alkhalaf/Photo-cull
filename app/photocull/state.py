@@ -40,6 +40,29 @@ def atomic_write_json(path: Path | str, data: Any) -> None:
         raise
 
 
+_PEEK: dict[str, tuple[tuple[int, int], dict]] = {}
+
+
+def peek(path: Path | str) -> dict[str, Any]:
+    """state.json as a plain dict for READ-ONLY use (the window refreshes often).
+
+    Re-parsed only when the file changed; the large per-photo measurements make a
+    fresh parse slow on big coverages. Never modify the returned dict.
+    """
+    path = Path(path)
+    try:
+        st = path.stat()
+    except OSError:
+        return _default()
+    sig = (st.st_size, st.st_mtime_ns)
+    hit = _PEEK.get(str(path))
+    if hit and hit[0] == sig:
+        return hit[1]
+    data = State(path).data
+    _PEEK[str(path)] = (sig, data)
+    return data
+
+
 class State:
     """Thin wrapper over state.json. Call save() to persist."""
 

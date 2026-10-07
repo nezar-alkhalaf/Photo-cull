@@ -11,7 +11,6 @@ from .logsetup import setup_logging
 from .paths import CoverageLayout, SafetyError, preflight
 
 NOT_YET = {
-    "all": "Stage 5",
     "doctor": "Stage 6",
 }
 HELP = {
@@ -20,6 +19,7 @@ HELP = {
     "edit": "step 2: exposure fix + Photoshop style",
     "split": "step 3: split photos into Instagram post folders",
     "all": "run steps 1, 2 and 3 in order",
+    "gui": "open the PhotoCull window",
     "doctor": "check that this PC is set up correctly",
 }
 
@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", metavar="command")
     for name, text in HELP.items():
         sp = sub.add_parser(name, help=text, description=text)
-        if name != "doctor":
+        if name not in ("doctor", "gui"):
             sp.add_argument("folder", help="main coverage folder (contains Full_Coverage)")
         if name in ("cull", "edit", "split"):
             sp.add_argument("--input", help="override the input folder for this step")
@@ -40,6 +40,16 @@ def build_parser() -> argparse.ArgumentParser:
                             help="portrait/class (eyes matter) or action/match (sharpness matters)")
             sp.add_argument("--existing", choices=["ask", "clear"], default="ask",
                             help="what to do if Selected/Alternates already have photos")
+        if name == "all":
+            sp.add_argument("--mode", choices=["portrait", "action"], default="portrait")
+            sp.add_argument("--style", help="style .psd (file name in Styles/ or a full path)")
+            sp.add_argument("--action", help='optional action after the style: "Set name/Action name"')
+            exp = sp.add_mutually_exclusive_group()
+            exp.add_argument("--exposure", dest="exposure", action="store_const", const=True)
+            exp.add_argument("--no-exposure", dest="exposure", action="store_const", const=False)
+            sp.add_argument("--max-per-post", type=int, help="max photos per post")
+            sp.add_argument("--replace", action="store_true",
+                            help="replace earlier picks / edits / posts instead of stopping")
         if name == "edit":
             sp.add_argument("--style", help="style .psd (file name in Styles/ or a full path)")
             sp.add_argument("--action", help='optional action after the style: "Set name/Action name"')
@@ -94,8 +104,13 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(layout.log, console=True).info("Initialised %s", layout.main)
         return 0
 
+    if args.command == "gui":
+        from .gui.app import main as gui_main
+        return gui_main(cfg)
     if args.command == "split":
         return _cmd_split(args, cfg)
+    if args.command == "all":
+        return _cmd_all(args, cfg)
     if args.command == "cull":
         return _cmd_cull(args, cfg)
     if args.command == "edit":
@@ -171,4 +186,36 @@ def _cmd_split(args, cfg) -> int:
     if res.data.get("needs_decision"):
         print("Re-run with --existing clear (delete old Post_N folders) "
               "or --existing new (add new numbered folders).", file=sys.stderr)
+    return 0 if res.ok else 1
+
+
+def _cmd_all(args, cfg) -> int:
+    from .edit import parse_action
+    from .pipeline import RunParams, run_all
+    from .styles import list_styles
+
+    layout = CoverageLayout.for_main(args.folder)
+    if not layout.main.is_dir():
+        print(f"Main folder does not exist: {layout.main}", file=sys.stderr)
+        return 1
+    if not (args.style or cfg.photoshop.default_style_file):
+        names = [p.name for p in list_styles(cfg)]
+        print("Choose a style with --style. In the Styles folder: "
+              + (", ".join(names) if names else "(no .psd files yet)"), file=sys.stderr)
+        return 1
+    try:
+        action = parse_action(args.action or cfg.photoshop.default_action)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    setup_logging(layout.log, console=False)
+    params = RunParams(args.mode, args.style, action, args.exposure, 0,
+                       args.max_per_post or cfg.split.max_per_post)
+    replace = (lambda step, res, choices: choices[0]) if args.replace else None
+    res = run_all(layout, cfg, params, _print_progress, lambda m: print(m),
+                  decide=replace, confirm_preview=lambda r: True,
+                  on_step=lambda s, what, r: print(f"== {s}: {what}", flush=True))
+    print(res.message, file=sys.stdout if res.ok else sys.stderr)
+    if res.data.get("needs_decision") or res.data.get("declined"):
+        print("Re-run with --replace to replace the earlier results.", file=sys.stderr)
     return 0 if res.ok else 1

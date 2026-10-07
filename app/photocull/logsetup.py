@@ -59,3 +59,15 @@ def setup_logging(coverage_log: Path | str | None = None,
 
 def get_logger() -> logging.Logger:
     return logging.getLogger(LOGGER_NAME)
+
+
+def set_coverage_log(path: Path | str | None) -> None:
+    """Log to this coverage's photocull.log only (the window can switch folders)."""
+    logger = logging.getLogger(LOGGER_NAME)
+    keep = (LOGS_DIR / "photocull.log").resolve()
+    for h in list(logger.handlers):
+        if isinstance(h, logging.FileHandler) and Path(h.baseFilename) != keep:
+            logger.removeHandler(h)
+            h.close()
+    if path:
+        _add_file_handler(logger, Path(path))

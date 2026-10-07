@@ -8,4 +8,6 @@ mediapipe==1.0.1
 opencv-contrib-python==5.0.0.93
 # Photoshop through COM (step 2). Tested with Photoshop 2026 (27.10).
 pywin32==312
+# Window (stage 5)
+customtkinter==6.0.0
 pytest>=8,<9

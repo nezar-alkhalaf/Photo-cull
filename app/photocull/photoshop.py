@@ -52,6 +52,39 @@ def _com():
     return pythoncom, pywintypes, win32com.client
 
 
+def probe() -> tuple[str, str]:
+    """Is Photoshop usable? Never launches it. Safe to call from any thread.
+
+    Returns (state, detail): "open" + version, "closed" (installed, not running),
+    "missing" (not installed) or "no_pywin32".
+    """
+    try:
+        pythoncom, pywintypes, client = _com()
+    except PhotoshopError:
+        return "no_pywin32", ""
+    pythoncom.CoInitialize()
+    try:
+        try:
+            app = client.GetActiveObject("Photoshop.Application")
+        except pywintypes.com_error:
+            return ("closed", "") if _installed() else ("missing", "")
+        try:
+            return "open", str(app.Version)
+        except Exception:
+            return "open", ""                  # running but busy (a dialog is open)
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _installed() -> bool:
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Photoshop.Application"))
+        return True
+    except OSError:
+        return False
+
+
 class Photoshop:
     """One COM connection. Use from a single thread."""
 

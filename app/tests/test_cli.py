@@ -13,7 +13,7 @@ def run(*args):
 def test_help_works():
     r = run("--help")
     assert r.returncode == 0
-    for cmd in ("init", "cull", "edit", "split", "all", "doctor"):
+    for cmd in ("init", "cull", "edit", "split", "all", "doctor", "gui"):
         assert cmd in r.stdout
 
 
@@ -32,7 +32,7 @@ def test_init_without_full_coverage_fails_cleanly(tmp_path):
 
 
 def test_stub_commands_exit_3():
-    assert run("all", ".").returncode == 3
+    assert run("doctor").returncode == 3
 
 
 def test_edit_exposure_switch():
