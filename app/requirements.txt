@@ -10,4 +10,3 @@ opencv-contrib-python==5.0.0.93
 pywin32==312
 # Window (stage 5)
 customtkinter==6.0.0
-pytest>=8,<9

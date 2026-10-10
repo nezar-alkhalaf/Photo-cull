@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,22 @@ def _default() -> dict[str, Any]:
     }
 
 
+def replace_with_retry(tmp: Path | str, path: Path | str) -> None:
+    """os.replace that waits out a short Windows file lock.
+
+    Windows refuses to replace a file another thread or program has open at that moment (the
+    window re-reads state.json and report.csv often). The lock is gone within milliseconds.
+    """
+    for attempt in range(8):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def atomic_write_json(path: Path | str, data: Any) -> None:
     """Write to a temp file in the same folder, then rename over the target."""
     path = Path(path)
@@ -34,7 +51,7 @@ def atomic_write_json(path: Path | str, data: Any) -> None:
             json.dump(data, fh, ensure_ascii=False, indent=2)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        replace_with_retry(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

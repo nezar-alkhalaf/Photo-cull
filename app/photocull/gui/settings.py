@@ -36,6 +36,8 @@ DEFAULTS: dict = {
     "edit_input": "",
     "split_input": "",
     "advanced_open": False,
+    "text_scale": 1.3,          # A- / A+ buttons in the sidebar; 1.0 = the old, smaller size
+    "language": "en",           # "en" or "ar": the button at the top of the window
 }
 
 

@@ -31,8 +31,10 @@ def test_init_without_full_coverage_fails_cleanly(tmp_path):
     assert r.returncode == 1 and "Full_Coverage" in r.stderr
 
 
-def test_stub_commands_exit_3():
-    assert run("doctor").returncode == 3
+def test_doctor_prints_a_checklist():
+    r = run("doctor")
+    assert r.returncode in (0, 1)
+    assert "[ OK ] Python" in r.stdout and "Photoshop" in r.stdout
 
 
 def test_edit_exposure_switch():

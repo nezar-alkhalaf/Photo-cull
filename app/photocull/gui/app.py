@@ -6,9 +6,11 @@ the main thread, and talks to the worker through its event queue.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
+import shutil
 import threading
 import time
 import traceback
@@ -29,14 +31,25 @@ from ..runner import Question, StepResult, Worker
 from ..split import distribute
 from ..state import peek
 from ..styles import list_styles, styles_dir
-from .settings import (SettingsError, UserSettings, build_config, max_per_post,
+from . import i18n
+from .i18n import anchor, justify, mcol, px, side, sticky, t, tr_msg
+from .settings import (DEFAULTS, SettingsError, UserSettings, build_config, max_per_post,
                        preview_count)
 from .thumbs import LRU, ThumbLoader
 from .widgets import (FONT, GridItem, StatCard, StepCard, ThumbGrid, Tooltip, ask_choice,
-                      theme)
+                      set_text_scale, theme)
 
-MODE_LABELS = {"portrait": "Portrait (studio)", "action": "Action (matches)"}
-CHOOSE_STYLE = "— choose a style —"
+MODE_KEYS = {"portrait": "Portrait (studio)", "action": "Action (matches)"}
+
+
+def mode_labels() -> dict[str, str]:
+    return {k: t(v) for k, v in MODE_KEYS.items()}
+
+
+def choose_style() -> str:
+    return t("— choose a style —")
+
+
 REASON_TEXT = {
     "blurry": "looks blurry", "closed_eyes": "eyes closed", "overexposed": "too bright",
     "underexposed": "too dark", "low_contrast": "flat, low contrast",
@@ -54,6 +67,10 @@ PS_TEXT = {
     "in_use": ("#2e8bd0", "Photoshop is being used by PhotoCull"),
 }
 LOG_KEEP_LINES = 1500
+NAV = {"home": ("⌂", "Home"), "review": ("▦", "Review photos"),
+       "settings": ("⚙", "Settings"), "activity": ("≡", "Activity")}
+TEXT_STEPS = (1.0, 1.15, 1.3, 1.5, 1.7)       # sizes the A- / A+ buttons step through
+MACHINE_KEYS = {"advanced_open", "main_folder", "cull_input", "edit_input", "split_input"}
 PREVIEW_H = 150
 
 
@@ -68,19 +85,24 @@ def _open_path(path: Path) -> None:
     try:
         os.startfile(str(path))                       # Windows: opens in Explorer / the viewer
     except OSError as exc:
-        messagebox.showerror("PhotoCull", f"Could not open {path}\n\n{exc}")
+        messagebox.showerror("PhotoCull", t("Could not open {path}\n\n{exc}").format(
+            path=path, exc=exc))
 
 
 class App(ctk.CTk):
     def __init__(self, cfg: Config, settings: UserSettings | None = None):
         self.settings = settings or UserSettings()
+        i18n.set_lang(self.settings["language"])
         ctk.set_appearance_mode(self.settings["appearance"])
         ctk.set_default_color_theme("blue")
+        self._text_scale = self._clean_scale(self.settings["text_scale"])
+        ctk.set_widget_scaling(self._text_scale)
+        set_text_scale(self._text_scale)
+        ctk.ThemeManager.theme["CTkFont"]["family"] = FONT        # one font everywhere
         super().__init__()
         self.cfg_base = cfg
         self.title(f"PhotoCull {__version__}")
-        self.geometry("1240x940")
-        self.minsize(1020, 720)
+        self._fit_window()
         self.layout: CoverageLayout | None = None
         self.worker: Worker | None = None
         self.run_kind = ""
@@ -121,203 +143,265 @@ class App(ctk.CTk):
                                                  name="warm-up").start())
 
     # ================================================================== layout
+    # Left sidebar with four pages (the way Lightroom / Capture One split their work):
+    #   Home      - the 3 things you do every time: folder, options, run
+    #   Review    - the picked photos and swapping them
+    #   Settings  - thresholds, folders and tools, each with a one-line explanation
+    #   Activity  - what the program did, step by step
     def _build(self) -> None:
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(5, weight=1)
-        pad = {"padx": 14}
-        self._build_header().grid(row=0, column=0, sticky="ew", pady=(10, 4), **pad)
-        self._build_dashboard().grid(row=1, column=0, sticky="ew", pady=4, **pad)
-        self._build_settings().grid(row=2, column=0, sticky="ew", pady=4, **pad)
-        self.advanced = self._build_advanced()
-        self.advanced.grid(row=3, column=0, sticky="ew", pady=0, **pad)
-        self._build_actions().grid(row=4, column=0, sticky="ew", pady=4, **pad)
-        self._build_review().grid(row=5, column=0, sticky="nsew", pady=4, **pad)
-        self._build_footer().grid(row=6, column=0, sticky="ew", pady=(4, 10), **pad)
-        self._toggle_advanced(self.settings["advanced_open"])
+        self.page_key = getattr(self, "page_key", "home")
+        for c in range(2):
+            self.columnconfigure(c, weight=0)
+        self.columnconfigure(mcol(1, 2), weight=1)
+        self.rowconfigure(0, weight=1)
+        self._build_sidebar().grid(row=0, column=mcol(0, 2), rowspan=2, sticky="ns")
+        content = ctk.CTkFrame(self, fg_color="transparent")
+        content.grid(row=0, column=mcol(1, 2), sticky="nsew", padx=px(12, 14), pady=(12, 0))
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(0, weight=1)
+        self.pages: dict[str, ctk.CTkBaseClass] = {}
+        for key, builder in (("home", self._build_home), ("review", self._build_review),
+                             ("settings", self._build_settings_page),
+                             ("activity", self._build_activity)):
+            page = builder(content)
+            page.grid(row=0, column=0, sticky="nsew")
+            self.pages[key] = page
+        self._build_footer().grid(row=1, column=mcol(1, 2), sticky="ew", padx=px(12, 14),
+                                  pady=(6, 10))
+        self.show_page(self.page_key)
 
-    def _build_header(self):
-        f = ctk.CTkFrame(self, corner_radius=10)
-        f.columnconfigure(1, weight=1)
-        self.btn_folder = ctk.CTkButton(f, text="Choose folder…", width=140, height=34,
-                                        command=self._choose_folder)
-        self.btn_folder.grid(row=0, column=0, padx=10, pady=10)
-        self.lbl_folder = ctk.CTkLabel(f, text="No folder chosen", anchor="w", font=(FONT, 13))
-        self.lbl_folder.grid(row=0, column=1, sticky="ew", padx=4)
-        self.ps_dot = ctk.CTkLabel(f, text="●", font=(FONT, 18), width=20)
-        self.ps_dot.grid(row=0, column=2, padx=(10, 0))
-        self.ps_text = ctk.CTkLabel(f, text="", font=(FONT, 12), anchor="w")
-        self.ps_text.grid(row=0, column=3, padx=(2, 12))
-        self.mode_menu = ctk.CTkOptionMenu(f, values=list(MODE_LABELS.values()), width=170,
-                                           command=self._on_mode)
-        self.mode_menu.set(MODE_LABELS[self.settings["mode"]])
-        self.mode_menu.grid(row=0, column=4, padx=6)
-        Tooltip(self.mode_menu, "Portrait: studio and class photos, eyes matter.\n"
-                                "Action: matches and events, sharpness matters most.")
-        self.theme_switch = ctk.CTkSwitch(f, text="Dark", width=70, command=self._toggle_theme)
+    # ---- small building blocks
+    def _page_header(self, parent, title: str, subtitle: str = "") -> ctk.CTkFrame:
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        ctk.CTkLabel(f, text=title, font=(FONT, 22, "bold"), anchor=anchor()).pack(fill="x")
+        if subtitle:
+            ctk.CTkLabel(f, text=subtitle, font=(FONT, 12), anchor=anchor(), justify=justify(),
+                         text_color=("gray35", "gray65"), wraplength=640).pack(fill="x")
+        return f
+
+    def _section(self, parent, title: str, number: int | None = None):
+        """A titled card. Returns (card, body) - put the widgets in `body`."""
+        card = ctk.CTkFrame(parent, corner_radius=12)
+        card.columnconfigure(0, weight=1)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+        if number is not None:
+            ctk.CTkLabel(head, text=str(number), width=26, height=26, corner_radius=13,
+                         fg_color=("#3B8ED0", "#1F6AA5"), text_color="white",
+                         font=(FONT, 13, "bold")).pack(side=side("left"), padx=px(0, 10))
+        ctk.CTkLabel(head, text=title, font=(FONT, 15, "bold"), anchor=anchor()).pack(
+            side=side("left"))
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 12))
+        return card, body
+
+    def _grey_button(self, parent, text: str, command, width: int = 140):
+        return ctk.CTkButton(parent, text=text, width=width, height=30, command=command,
+                             fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"),
+                             text_color=("gray10", "gray95"))
+
+    # ---- sidebar
+    def _nav_text(self, key: str) -> str:
+        icon, label = NAV[key]
+        text = f"{i18n.RLM}{icon}   {t(label)}" if i18n.is_ar() else f"  {icon}   {t(label)}"
+        if key == "review" and self.review and (self.review.selected or self.review.alternates):
+            text += f"  ({len(self.review.selected)})"
+        return text
+
+    def _build_sidebar(self):
+        f = ctk.CTkFrame(self, width=210, corner_radius=0, fg_color=("gray88", "gray14"))
+        f.grid_propagate(False)
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(6, weight=1)
+        ctk.CTkLabel(f, text="PhotoCull", font=(FONT, 22, "bold"), anchor=anchor()).grid(
+            row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
+        ctk.CTkLabel(f, text=f"v{__version__}", font=(FONT, 11), anchor=anchor(),
+                     text_color=("gray40", "gray60")).grid(
+            row=1, column=0, sticky="ew", padx=18, pady=(0, 14))
+        self.nav_btns: dict[str, ctk.CTkButton] = {}
+        for i, key in enumerate(NAV):
+            b = ctk.CTkButton(f, text=self._nav_text(key), anchor=anchor(), height=42,
+                              font=(FONT, 14), corner_radius=8,
+                              command=lambda k=key: self.show_page(k))
+            b.grid(row=2 + i, column=0, sticky="ew", padx=10, pady=2)
+            self.nav_btns[key] = b
+        # bottom block: Photoshop status, theme, language
+        bottom = ctk.CTkFrame(f, fg_color="transparent")
+        bottom.grid(row=7, column=0, sticky="ew", padx=14, pady=(0, 14))
+        bottom.columnconfigure(mcol(1, 2), weight=1)
+        self.ps_dot = ctk.CTkLabel(bottom, text="●", font=(FONT, 16), width=18)
+        self.ps_dot.grid(row=0, column=mcol(0, 2), sticky="n", pady=(2, 0))
+        self.ps_text = ctk.CTkLabel(bottom, text="", font=(FONT, 11), anchor=anchor(),
+                                    justify=justify(), wraplength=140)
+        self.ps_text.grid(row=0, column=mcol(1, 2), sticky="ew", padx=px(4, 0))
+        self.theme_switch = ctk.CTkSwitch(bottom, text=t("Dark"), width=70,
+                                          command=self._toggle_theme)
         if self.settings["appearance"] == "dark":
             self.theme_switch.select()
-        self.theme_switch.grid(row=0, column=5, padx=(8, 12))
+        self.theme_switch.grid(row=1, column=0, columnspan=2, sticky=sticky("w"), pady=(12, 8))
+        self.btn_lang = ctk.CTkButton(bottom, text="English" if i18n.is_ar() else "العربية",
+                                      width=90, height=30, command=self._toggle_language)
+        self.btn_lang.grid(row=2, column=0, columnspan=2, sticky=sticky("w"))
+        Tooltip(self.btn_lang, t("Switch the window between English and Arabic"))
+        size = ctk.CTkFrame(bottom, fg_color="transparent")
+        size.grid(row=3, column=0, columnspan=2, sticky=sticky("w"), pady=(10, 0))
+        for i, (text, delta, tip) in enumerate((("A−", -1, "Smaller text"),
+                                                 ("A+", 1, "Bigger text"))):
+            b = self._grey_button(size, text, lambda d=delta: self._change_text_size(d), 42)
+            b.configure(font=(FONT, 14, "bold"))
+            b.grid(row=0, column=mcol(i, 2), padx=px(0, 6))
+            Tooltip(b, t(tip))
         return f
 
-    def _build_dashboard(self):
-        f = ctk.CTkFrame(self, fg_color="transparent")
-        for i in range(5):
-            f.columnconfigure(i, weight=1, uniform="stat")
-        self.card_total = StatCard(f, "Photos")
-        self.card_groups = StatCard(f, "Moments")
-        self.card_selected = StatCard(f, "Selected")
-        self.card_alts = StatCard(f, "Alternates")
-        self.card_rejected = StatCard(f, "Rejected")
-        for i, c in enumerate((self.card_total, self.card_groups, self.card_selected,
-                               self.card_alts, self.card_rejected)):
-            c.grid(row=0, column=i, sticky="nsew", padx=4)
-        self.lbl_predict = ctk.CTkLabel(f, text="", font=(FONT, 15, "bold"))
-        self.lbl_predict.grid(row=1, column=0, columnspan=5, pady=(4, 0))
-        return f
+    def show_page(self, key: str) -> None:
+        self.page_key = key
+        self.pages[key].lift()
+        for k, b in self.nav_btns.items():
+            on = k == key
+            b.configure(fg_color=("#3B8ED0", "#1F6AA5") if on else "transparent",
+                        text_color="white" if on else ("gray10", "gray90"),
+                        hover_color=("#3B8ED0", "#1F6AA5") if on else ("gray78", "gray22"))
 
-    def _build_settings(self):
-        f = ctk.CTkFrame(self, corner_radius=10)
+    # ---- page 1: Home
+    def _build_home(self, parent):
+        f = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        f.columnconfigure(0, weight=1)
+
+        # 1. folder
+        card, body = self._section(f, t("Coverage folder"), 1)
+        card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        body.columnconfigure(mcol(1, 2), weight=1)
+        self.btn_folder = ctk.CTkButton(body, text=t("Choose folder…"), width=150, height=34,
+                                        command=self._choose_folder)
+        self.btn_folder.grid(row=0, column=mcol(0, 2), padx=px(0, 12))
+        self.lbl_folder = ctk.CTkLabel(body, text=t("No folder chosen"), anchor=anchor(),
+                                       font=(FONT, 13), wraplength=620, justify=justify())
+        self.lbl_folder.grid(row=0, column=mcol(1, 2), sticky="ew")
+        ctk.CTkLabel(body, text=t("Pick the folder of this coverage. It must hold a Full_Coverage "
+                                  "folder with all the photos."),
+                     font=(FONT, 11), anchor=anchor(), justify=justify(), wraplength=760,
+                     text_color=("gray35", "gray65")).grid(row=1, column=0, columnspan=2,
+                                                           sticky="ew", pady=(6, 0))
+
+        # 2. options
+        card, body = self._section(f, t("Options"), 2)
+        card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         c = 0
-        ctk.CTkLabel(f, text="Style", font=(FONT, 12)).grid(row=0, column=c, padx=(12, 4), pady=10)
+        ctk.CTkLabel(body, text=t("Type of shoot"), font=(FONT, 12)).grid(
+            row=0, column=mcol(c, 5), sticky=sticky("w"), padx=px(0, 6))
         c += 1
-        self.style_menu = ctk.CTkOptionMenu(f, values=[CHOOSE_STYLE], width=210,
+        self.mode_menu = ctk.CTkOptionMenu(body, values=list(mode_labels().values()), width=170,
+                                           command=self._on_mode)
+        self.mode_menu.set(mode_labels()[self.settings["mode"]])
+        self.mode_menu.grid(row=0, column=mcol(c, 5), padx=px(0, 18))
+        Tooltip(self.mode_menu, t("Portrait: studio and class photos, eyes matter.\n"
+                                  "Action: matches and events, sharpness matters most."))
+        c += 1
+        ctk.CTkLabel(body, text=t("Style"), font=(FONT, 12)).grid(
+            row=0, column=mcol(c, 5), sticky=sticky("w"), padx=px(0, 6))
+        c += 1
+        self.style_menu = ctk.CTkOptionMenu(body, values=[choose_style()], width=210,
                                             command=lambda _v: self._on_setting())
-        self.style_menu.grid(row=0, column=c, padx=4)
+        self.style_menu.grid(row=0, column=mcol(c, 5), padx=px(0, 4))
         c += 1
-        link = ctk.CTkButton(f, text="Open Styles folder", width=120, height=22,
-                             font=(FONT, 11, "underline"), fg_color="transparent", hover=False,
-                             text_color=("#1a62b8", "#7ab7ff"),
-                             command=lambda: self._open_styles())
-        link.grid(row=0, column=c, padx=(0, 10))
-        c += 1
-        ctk.CTkLabel(f, text="Max images per post", font=(FONT, 12)).grid(row=0, column=c, padx=(8, 4))
-        c += 1
+        ctk.CTkButton(body, text=t("Open Styles folder"), width=120, height=22,
+                      font=(FONT, 11, "underline"), fg_color="transparent", hover=False,
+                      text_color=("#1a62b8", "#7ab7ff"),
+                      command=self._open_styles).grid(row=0, column=mcol(c, 5))
+        # second row
+        ctk.CTkLabel(body, text=t("Max images per post"), font=(FONT, 12)).grid(
+            row=1, column=mcol(0, 5), sticky=sticky("w"), padx=px(0, 6), pady=(12, 0))
         self.var_mpp = ctk.StringVar(value=str(self.settings["max_per_post"]
                                                or self.cfg_base.split.max_per_post))
-        e = ctk.CTkEntry(f, textvariable=self.var_mpp, width=52, justify="center")
-        e.grid(row=0, column=c, padx=4)
+        ctk.CTkEntry(body, textvariable=self.var_mpp, width=60, justify="center").grid(
+            row=1, column=mcol(1, 5), sticky=sticky("w"), pady=(12, 0))
         self.var_mpp.trace_add("write", lambda *_: self._on_setting())
-        c += 1
-        ctk.CTkLabel(f, text="Group gap (s)", font=(FONT, 12)).grid(row=0, column=c, padx=(12, 4))
-        c += 1
-        self.var_gap = ctk.StringVar()
-        ge = ctk.CTkEntry(f, textvariable=self.var_gap, width=58, justify="center")
-        ge.grid(row=0, column=c, padx=4)
-        Tooltip(ge, "Photos taken closer together than this many seconds count as one moment.")
-        self.var_gap.trace_add("write", lambda *_: self._on_setting())
-        c += 1
         exp = self.settings["exposure"]
         self.var_exposure = ctk.BooleanVar(
             value=self.cfg_base.exposure_correction.enabled if exp is None else bool(exp))
-        cb = ctk.CTkCheckBox(f, text="Fix exposure", variable=self.var_exposure,
+        cb = ctk.CTkCheckBox(body, text=t("Fix exposure"), variable=self.var_exposure,
                              command=self._on_setting)
-        cb.grid(row=0, column=c, padx=(16, 4))
-        Tooltip(cb, "Brightens dark photos before Photoshop. ON for night matches, "
-                    "OFF for studio.")
-        c += 1
-        f.columnconfigure(c, weight=1)
-        self.btn_adv = ctk.CTkButton(f, text="Advanced ▸", width=100, height=26,
-                                     fg_color="transparent", hover=False,
-                                     text_color=("#1a62b8", "#7ab7ff"), font=(FONT, 12),
-                                     command=lambda: self._toggle_advanced())
-        self.btn_adv.grid(row=0, column=c + 1, padx=10, sticky="e")
-        self._fill_gap_var()
-        return f
+        cb.grid(row=1, column=0 if i18n.is_ar() else 2, columnspan=3, sticky=sticky("w"),
+                pady=(12, 0))
+        Tooltip(cb, t("Brightens dark photos before Photoshop. ON for night matches, "
+                      "OFF for studio."))
 
-    def _build_advanced(self):
-        f = ctk.CTkFrame(self, corner_radius=10)
-        self.adv_vars: dict[str, ctk.StringVar] = {}
-        d = self.cfg_base
-
-        def field(r, c, label, key, hint, width=70):
-            ctk.CTkLabel(f, text=f"{label} ({hint})", font=(FONT, 12), anchor="e").grid(
-                row=r, column=c * 2, padx=(14, 4), pady=5, sticky="e")
-            var = ctk.StringVar(value=str(self.settings[key]))
-            ent = ctk.CTkEntry(f, textvariable=var, width=width, justify="center")
-            ent.grid(row=r, column=c * 2 + 1, padx=(0, 6), sticky="w")
-            var.trace_add("write", lambda *_: self._on_setting())
-            self.adv_vars[key] = var
-            return ent
-
-        field(0, 0, "Blur threshold", "blurry_sharpness", f"{d.detection.blurry_sharpness:g}")
-        field(0, 1, "Closed-eye threshold", "ear_closed_threshold",
-              f"{d.detection.ear_closed_threshold:g}")
-        field(0, 2, "Alternates per moment", "keep_alternates", f"{d.grouping.keep_alternates}")
-        field(0, 3, "JPEG quality", "jpeg_quality", f"{d.photoshop.jpeg_quality}")
-        field(1, 0, "Photoshop Action", "action", "Set/Action, optional", 130)
-        field(1, 1, "Preview first photos", "preview", "0 = off")
-        self.var_skip = ctk.BooleanVar(
-            value=d.grouping.skip_blurry_groups if self.settings["skip_blurry_groups"] is None
-            else bool(self.settings["skip_blurry_groups"]))
-        ctk.CTkCheckBox(f, text="Skip blurry moments", variable=self.var_skip,
-                        command=self._on_setting).grid(row=1, column=4, columnspan=2,
-                                                       padx=14, sticky="w")
-        for r, (label, key) in enumerate((("Cull reads from (empty = Full_Coverage)", "cull_input"),
-                                          ("Edit reads from (empty = Selected)", "edit_input"),
-                                          ("Split reads from (empty = Edited)", "split_input")),
-                                         start=2):
-            ctk.CTkLabel(f, text=label, font=(FONT, 12), anchor="e").grid(
-                row=r, column=0, columnspan=2, padx=(14, 4), pady=3, sticky="e")
-            var = ctk.StringVar(value=str(self.settings[key]))
-            ent = ctk.CTkEntry(f, textvariable=var)
-            ent.grid(row=r, column=2, columnspan=4, sticky="ew", padx=(0, 6))
-            var.trace_add("write", lambda *_: self._on_setting())
-            self.adv_vars[key] = var
-            ctk.CTkButton(f, text="Browse…", width=80, height=26,
-                          command=lambda v=var: self._browse_into(v)).grid(
-                row=r, column=6, padx=(0, 6))
-        f.columnconfigure(5, weight=1)
-        bar = ctk.CTkFrame(f, fg_color="transparent")
-        bar.grid(row=5, column=0, columnspan=8, sticky="ew", pady=(4, 8), padx=10)
-        ctk.CTkButton(bar, text="Open logs folder", width=130, height=28,
-                      command=lambda: _open_path(LOGS_DIR)).pack(side="left", padx=4)
-        ctk.CTkButton(bar, text="Reset advanced values", width=150, height=28,
-                      fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"),
-                      text_color=("gray10", "gray95"),
-                      command=self._reset_advanced).pack(side="left", padx=4)
-        return f
-
-    def _build_actions(self):
-        f = ctk.CTkFrame(self, fg_color="transparent")
-        f.columnconfigure((0, 1, 2), weight=1, uniform="card")
-        self.btn_all = ctk.CTkButton(f, text="▶  Run All", height=46, font=(FONT, 19, "bold"),
-                                     fg_color=("#2e8b57", "#2e8b57"),
+        # 3. run
+        card, body = self._section(f, t("Run"), 3)
+        card.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        body.columnconfigure((0, 1, 2), weight=1, uniform="card")
+        self.btn_all = ctk.CTkButton(body, text=t("▶  Run All"), height=46,
+                                     font=(FONT, 19, "bold"), fg_color=("#2e8b57", "#2e8b57"),
                                      hover_color=("#256f46", "#3aa66a"),
                                      command=lambda: self._start("all"))
-        self.btn_all.grid(row=0, column=0, columnspan=3, sticky="ew", padx=4, pady=(0, 6))
+        self.btn_all.grid(row=0, column=0, columnspan=3, sticky="ew", padx=4, pady=(0, 4))
         self.tip_all = Tooltip(self.btn_all)
+        self.lbl_predict = ctk.CTkLabel(body, text="", font=(FONT, 13, "bold"))
+        self.lbl_predict.grid(row=1, column=0, columnspan=3, pady=(0, 6))
         self.cards = {
-            "cull": StepCard(f, "1. Cull", "Pick the best photos",
-                             "Reads Full_Coverage, keeps the best frame of each moment.",
+            "cull": StepCard(body, t("1. Cull"), t("Pick the best photos"),
+                             t("Reads Full_Coverage, keeps the best frame of each moment."),
                              lambda: self._start("cull"), lambda: self._open_step("cull")),
-            "edit": StepCard(f, "2. Edit in Photoshop", "Edit photos",
-                             "Reads Selected, applies your style, saves to Edited.",
+            "edit": StepCard(body, t("2. Edit in Photoshop"), t("Edit photos"),
+                             t("Reads Selected, applies your style, saves to Edited."),
                              lambda: self._start("edit"), lambda: self._open_step("edit")),
-            "split": StepCard(f, "3. Split into posts", "Split photos",
-                              "Reads Edited, copies into Post_1, Post_2… folders.",
+            "split": StepCard(body, t("3. Split into posts"), t("Split photos"),
+                              t("Reads Edited, copies into Post_1, Post_2… folders."),
                               lambda: self._start("split"), lambda: self._open_step("split")),
         }
         for i, step in enumerate(STEPS):
-            self.cards[step].grid(row=1, column=i, sticky="nsew", padx=4)
+            self.cards[step].grid(row=2, column=mcol(i, 3), sticky="nsew", padx=4)
+
+        # results summary
+        card, body = self._section(f, t("Summary"))
+        card.grid(row=3, column=0, sticky="ew")
+        for i in range(5):
+            body.columnconfigure(i, weight=1, uniform="stat")
+        self.card_total = StatCard(body, t("Photos"))
+        self.card_groups = StatCard(body, t("Moments"))
+        self.card_selected = StatCard(body, t("Selected"))
+        self.card_alts = StatCard(body, t("Alternates"))
+        self.card_rejected = StatCard(body, t("Rejected"))
+        for i, sc in enumerate((self.card_total, self.card_groups, self.card_selected,
+                                self.card_alts, self.card_rejected)):
+            sc.grid(row=0, column=mcol(i, 5), sticky="nsew", padx=4)
+        self.btn_go_review = ctk.CTkButton(body, text=t("Review the picked photos →"), height=30,
+                                           fg_color="transparent", hover=False,
+                                           font=(FONT, 12, "underline"),
+                                           text_color=("#1a62b8", "#7ab7ff"),
+                                           command=lambda: self.show_page("review"))
+        self.btn_go_review.grid(row=1, column=0, columnspan=5, pady=(6, 0))
         return f
 
-    def _build_review(self):
-        f = ctk.CTkFrame(self, corner_radius=10)
-        f.columnconfigure(0, weight=1)
+    # ---- page 2: Review photos
+    def _build_review(self, parent):
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
+        self._page_header(page, t("Review photos"),
+                          t("Check what the program picked. You can swap any photo with "
+                            "another frame of the same moment.")).grid(
+            row=0, column=0, sticky="ew", pady=(0, 8))
+        f = ctk.CTkFrame(page, corner_radius=12)
+        f.grid(row=1, column=0, sticky="nsew")
+        f.columnconfigure(0, weight=0)
+        f.columnconfigure(mcol(0, 2), weight=1)
         f.rowconfigure(1, weight=1)
         top = ctk.CTkFrame(f, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 2))
-        self.seg = ctk.CTkSegmentedButton(top, values=["Selected", "Alternates"],
+        top.grid(row=0, column=mcol(0, 2), sticky="ew", padx=10, pady=(8, 2))
+        self.seg = ctk.CTkSegmentedButton(top, values=[t("Selected"), t("Alternates")],
                                           command=self._on_view)
-        self.seg.set("Selected")
-        self.seg.pack(side="left")
-        ctk.CTkLabel(top, text="Click a photo to see why it was picked. Double-click opens it.",
-                     font=(FONT, 11), text_color=("gray35", "gray65")).pack(side="left", padx=12)
+        self.seg.set(t("Selected"))
+        self.seg.pack(side=side("left"))
+        ctk.CTkLabel(top, text=t("Click a photo to see why it was picked. Double-click opens it."),
+                     font=(FONT, 11), text_color=("gray35", "gray65")).pack(side=side("left"),
+                                                                           padx=12)
         self.grid_view = ThumbGrid(f, self.loader, self.cache, self._on_select, self._open_item)
-        self.grid_view.grid(row=1, column=0, sticky="nsew", padx=(10, 4), pady=(0, 10))
+        self.grid_view.grid(row=1, column=mcol(0, 2), sticky="nsew", padx=px(10, 4), pady=(0, 10))
         self.detail = self._build_detail(f)
-        self.detail.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(4, 10), pady=10)
-        return f
+        self.detail.grid(row=0, column=mcol(1, 2), rowspan=2, sticky="ns", padx=px(4, 10),
+                         pady=10)
+        return page
 
     def _build_detail(self, master):
         f = ctk.CTkFrame(master, width=330, corner_radius=8)
@@ -325,8 +409,8 @@ class App(ctk.CTk):
         f.columnconfigure(0, weight=1)
         self.preview = ctk.CTkLabel(f, text="", width=300, height=PREVIEW_H)
         self.preview.grid(row=0, column=0, padx=10, pady=(8, 2))
-        self.lbl_name = ctk.CTkLabel(f, text="Select a photo", font=(FONT, 13, "bold"),
-                                     wraplength=300, justify="left", anchor="w")
+        self.lbl_name = ctk.CTkLabel(f, text=t("Select a photo"), font=(FONT, 13, "bold"),
+                                     wraplength=300, justify=justify(), anchor=anchor())
         self.lbl_name.grid(row=1, column=0, sticky="ew", padx=12)
         self.btn_a = ctk.CTkButton(f, text="", height=32, command=lambda: self._act("a"))
         self.btn_b = ctk.CTkButton(f, text="", height=28, command=lambda: self._act("b"),
@@ -339,31 +423,181 @@ class App(ctk.CTk):
         self.btn_a.grid_remove()
         self.btn_b.grid_remove()
         self.lbl_info = ctk.CTkLabel(f, text="", font=(FONT, 12), wraplength=300,
-                                     justify="left", anchor="nw")
+                                     justify=justify(), anchor="n" + anchor())
         self.lbl_info.grid(row=4, column=0, sticky="nsew", padx=12, pady=(0, 6))
         f.rowconfigure(4, weight=1)
         return f
 
+    # ---- page 3: Settings
+    def _setting_row(self, body, row: int, label: str, explain: str, key: str | None = None,
+                     placeholder: str = "", width: int = 90, var=None, browse: bool = False):
+        """label + one-line explanation on the left, the entry on the right."""
+        text = ctk.CTkFrame(body, fg_color="transparent")
+        text.grid(row=row, column=mcol(0, 2), sticky="ew", pady=5)
+        ctk.CTkLabel(text, text=label, font=(FONT, 13, "bold"), anchor=anchor()).pack(fill="x")
+        if placeholder and key != "preview":
+            explain += "  ·  " + t("Normal value: {v}").format(v=placeholder)
+        ctk.CTkLabel(text, text=explain, font=(FONT, 11), anchor=anchor(), justify=justify(),
+                     wraplength=520, text_color=("gray35", "gray65")).pack(fill="x")
+        if var is None:
+            var = ctk.StringVar(value=str(self.settings[key]))
+            var.trace_add("write", lambda *_: self._on_setting())
+            self.adv_vars[key] = var
+        ent = ctk.CTkEntry(body, textvariable=var, width=width, justify="center",
+                           placeholder_text=placeholder)
+        ent.grid(row=row, column=mcol(1, 2), sticky=sticky("e"), padx=px(12, 0))
+        if browse:
+            ent.configure(justify="left")
+            ctk.CTkButton(body, text=t("Browse…"), width=80, height=26,
+                          command=lambda v=var: self._browse_into(v)).grid(
+                row=row, column=2, padx=(6, 0))
+        return ent
+
+    def _build_settings_page(self, parent):
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
+        self._page_header(page, t("Settings"),
+                          t("Most people never need to change these. The normal values work well. "
+                            "An empty box means the normal value (written under each setting).")).grid(
+            row=0, column=0, sticky="ew", pady=(0, 8))
+        scroll = ctk.CTkScrollableFrame(page, fg_color="transparent")
+        scroll.grid(row=1, column=0, sticky="nsew")
+        scroll.columnconfigure(0, weight=1)
+        self.adv_vars: dict[str, ctk.StringVar] = {}
+        d = self.cfg_base
+
+        def section(title):
+            card, body = self._section(scroll, title)
+            card.grid(row=section.n, column=0, sticky="ew", pady=(0, 10))
+            body.columnconfigure(mcol(0, 2), weight=1)
+            section.n += 1
+            return body
+        section.n = 0
+
+        body = section(t("Grouping photos into moments"))
+        self.var_gap = ctk.StringVar()
+        self._setting_row(body, 0, t("Group gap (s)"),
+                          t("Photos taken closer together than this many seconds count as "
+                            "one moment."), var=self.var_gap, width=70)
+        self.var_gap.trace_add("write", lambda *_: self._on_setting())
+        self._setting_row(body, 1, t("Alternates per moment"),
+                          t("How many runner-up photos to keep next to each pick."),
+                          "keep_alternates", f"{d.grouping.keep_alternates}")
+        self.var_skip = ctk.BooleanVar(
+            value=d.grouping.skip_blurry_groups if self.settings["skip_blurry_groups"] is None
+            else bool(self.settings["skip_blurry_groups"]))
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=5)
+        ctk.CTkCheckBox(row, text=t("Skip blurry moments"), variable=self.var_skip,
+                        command=self._on_setting, font=(FONT, 13, "bold")).pack(anchor=anchor())
+        ctk.CTkLabel(row, text=t("If even the sharpest photo of a moment is blurry, leave the "
+                                 "whole moment out."),
+                     font=(FONT, 11), text_color=("gray35", "gray65"), anchor=anchor(),
+                     justify=justify(), wraplength=620).pack(fill="x", padx=(28, 28))
+
+        body = section(t("Spotting weak photos"))
+        self._setting_row(body, 0, t("Blur threshold"),
+                          t("Photos sharper than this count as sharp. Higher = stricter."),
+                          "blurry_sharpness", f"{d.detection.blurry_sharpness:g}")
+        self._setting_row(body, 1, t("Closed-eye threshold"),
+                          t("Eyes narrower than this count as closed. Higher = stricter."),
+                          "ear_closed_threshold", f"{d.detection.ear_closed_threshold:g}")
+
+        body = section(t("Photoshop"))
+        self._setting_row(body, 0, t("JPEG quality"),
+                          t("Quality of the edited photos saved by Photoshop (1 to 100)."),
+                          "jpeg_quality", f"{d.photoshop.jpeg_quality}")
+        self._setting_row(body, 1, t("Photoshop Action"),
+                          t("Optional: an Action to run after the style, written Set/Action."),
+                          "action", "", width=160)
+        self._setting_row(body, 2, t("Preview first photos"),
+                          t("Edit only this many photos, then pause so you can check the look. "
+                            "Empty = off."), "preview", "0")
+
+        body = section(t("Folders"))
+        ctk.CTkLabel(body, text=t("Leave these empty to use the normal folders. Change them only "
+                                  "to work on photos kept somewhere else."),
+                     font=(FONT, 11), text_color=("gray35", "gray65"), anchor=anchor(),
+                     justify=justify(), wraplength=620).grid(row=0, column=0, columnspan=3,
+                                                             sticky="ew")
+        body.columnconfigure(1, weight=1)
+        body.columnconfigure(mcol(1, 3), weight=1)
+        for r, (label, key, ph) in enumerate((
+                (t("Cull reads from (empty = Full_Coverage)"), "cull_input", "Full_Coverage"),
+                (t("Edit reads from (empty = Selected)"), "edit_input", "Selected"),
+                (t("Split reads from (empty = Edited)"), "split_input", "Edited")), start=1):
+            ctk.CTkLabel(body, text=label, font=(FONT, 12), anchor=anchor()).grid(
+                row=r, column=mcol(0, 3), sticky=sticky("w"), pady=4, padx=px(0, 10))
+            var = ctk.StringVar(value=str(self.settings[key]))
+            var.trace_add("write", lambda *_: self._on_setting())
+            self.adv_vars[key] = var
+            ctk.CTkEntry(body, textvariable=var, placeholder_text=ph).grid(
+                row=r, column=mcol(1, 3), sticky="ew")
+            ctk.CTkButton(body, text=t("Browse…"), width=80, height=26,
+                          command=lambda v=var: self._browse_into(v)).grid(
+                row=r, column=mcol(2, 3), padx=px(6, 0))
+
+        body = section(t("Tools"))
+        bar = ctk.CTkFrame(body, fg_color="transparent")
+        bar.grid(row=0, column=0, columnspan=2, sticky=sticky("w"))
+        for i, (text, cmd) in enumerate(((t("Check this PC"), self._open_doctor),
+                                         (t("Open logs folder"), lambda: _open_path(LOGS_DIR)),
+                                         (t("Export settings…"), self._export_settings),
+                                         (t("Import settings…"), self._import_settings),
+                                         (t("Reset advanced values"), self._reset_advanced))):
+            (ctk.CTkButton(bar, text=text, width=150, height=30, command=cmd) if i == 0 else
+             self._grey_button(bar, text, cmd, 150)).grid(
+                row=i // 3, column=mcol(i % 3, 3), padx=px(0, 8), pady=4, sticky=sticky("w"))
+        self._fill_gap_var()
+        return page
+
+    # ---- page 4: Activity
+    def _build_activity(self, parent):
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(1, weight=1)
+        head = ctk.CTkFrame(page, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        head.columnconfigure(mcol(0, 3), weight=1)
+        self._page_header(head, t("Activity"),
+                          t("What PhotoCull did, step by step. Warnings and errors are in red.")
+                          ).grid(row=0, column=mcol(0, 3), sticky="ew")
+        self._grey_button(head, t("Clear"), self._clear_log, 90).grid(
+            row=0, column=mcol(1, 3), padx=4)
+        self._grey_button(head, t("Open logs folder"), lambda: _open_path(LOGS_DIR), 150).grid(
+            row=0, column=mcol(2, 3), padx=4)
+        self.log = ctk.CTkTextbox(page, font=("Consolas", 12), wrap="none", state="disabled",
+                                  corner_radius=12)
+        self.log.grid(row=1, column=0, sticky="nsew")
+        self.log._textbox.tag_config("err", foreground="#ff7b72")
+        return page
+
+    # ---- always-visible bottom bar
     def _build_footer(self):
-        f = ctk.CTkFrame(self, corner_radius=10)
+        f = ctk.CTkFrame(self, corner_radius=12)
         f.columnconfigure(0, weight=1)
         row = ctk.CTkFrame(f, fg_color="transparent")
-        row.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 2))
-        row.columnconfigure(0, weight=1)
+        row.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+        row.columnconfigure(mcol(0, 2), weight=1)
         self.progress = ctk.CTkProgressBar(row)
         self.progress.set(0)
-        self.progress.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-        self.btn_stop = ctk.CTkButton(row, text="Stop", width=90, height=30,
+        self.progress.grid(row=0, column=mcol(0, 2), sticky="ew", padx=px(0, 10))
+        self.btn_stop = ctk.CTkButton(row, text=t("Stop"), width=90, height=30,
                                       fg_color=("#c0392b", "#a93226"),
                                       hover_color=("#a93226", "#c0392b"),
                                       command=self._stop, state="disabled")
-        self.btn_stop.grid(row=0, column=1)
-        self.lbl_progress = ctk.CTkLabel(f, text="Ready.", anchor="w", font=(FONT, 12))
-        self.lbl_progress.grid(row=1, column=0, sticky="ew", padx=12)
-        self.log = ctk.CTkTextbox(f, height=60, font=("Consolas", 11), wrap="none",
-                                  state="disabled")
-        self.log.grid(row=2, column=0, sticky="ew", padx=10, pady=(2, 10))
-        self.log._textbox.tag_config("err", foreground="#ff7b72")
+        self.btn_stop.grid(row=0, column=mcol(1, 2))
+        line = ctk.CTkFrame(f, fg_color="transparent")
+        line.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        line.columnconfigure(mcol(0, 2), weight=1)
+        self.lbl_progress = ctk.CTkLabel(line, text=t("Ready."), anchor=anchor(),
+                                         font=(FONT, 12), justify=justify(), wraplength=900)
+        self.lbl_progress.grid(row=0, column=mcol(0, 2), sticky="ew")
+        ctk.CTkButton(line, text=t("Details ›"), width=70, height=22, fg_color="transparent",
+                      hover=False, font=(FONT, 12, "underline"),
+                      text_color=("#1a62b8", "#7ab7ff"),
+                      command=lambda: self.show_page("activity")).grid(row=0, column=mcol(1, 2))
         return f
 
     # ================================================================== settings
@@ -374,7 +608,7 @@ class App(ctk.CTk):
             self._set_folder(Path(saved), ask_create=False)
         else:
             if saved:
-                self.lbl_folder.configure(text="The last folder is gone. Choose it again.")
+                self.lbl_folder.configure(text=t("The last folder is gone. Choose it again."))
             self._refresh_all()
 
     def _on_setting(self, *_a) -> None:
@@ -401,7 +635,7 @@ class App(ctk.CTk):
 
     def _style_value(self) -> str:
         v = self.style_menu.get()
-        return "" if v == CHOOSE_STYLE else v
+        return "" if v == choose_style() else v
 
     def _fill_gap_var(self) -> None:
         s = self.settings
@@ -413,9 +647,73 @@ class App(ctk.CTk):
         self._suppress = False
 
     def _on_mode(self, label: str) -> None:
-        self.settings["mode"] = next(k for k, v in MODE_LABELS.items() if v == label)
+        self.settings["mode"] = next(k for k, v in mode_labels().items() if v == label)
         self._fill_gap_var()
         self.settings.save()
+
+    @staticmethod
+    def _clean_scale(value) -> float:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            v = 1.3
+        return min(TEXT_STEPS, key=lambda s: abs(s - v))
+
+    def _fit_window(self) -> None:
+        """Open big enough for the current text size, but never larger than the screen."""
+        s = self._text_scale
+        dpi = max(1.0, self.winfo_fpixels("1i") / 96)
+        w = min(int(1100 * s), int(self.winfo_screenwidth() / dpi * 0.96))
+        h = min(int(780 * s), int(self.winfo_screenheight() / dpi * 0.9))
+        self.geometry(f"{w}x{h}+10+10")
+        self.minsize(min(900, w), min(600, h))
+
+    def _change_text_size(self, delta: int) -> None:
+        if self.worker and self.worker.running:
+            messagebox.showinfo("PhotoCull", t("Wait for the current step to finish."),
+                                parent=self)
+            return
+        i = TEXT_STEPS.index(self._text_scale) + delta
+        if not 0 <= i < len(TEXT_STEPS):
+            return
+        self._text_scale = TEXT_STEPS[i]
+        self.settings["text_scale"] = self._text_scale
+        self.settings.save()
+        ctk.set_widget_scaling(self._text_scale)
+        set_text_scale(self._text_scale)
+        self._fit_window()
+        self._rebuild_ui()
+
+    def _toggle_language(self) -> None:
+        """Switch English <-> Arabic and redraw the whole window in the new language."""
+        if self.worker and self.worker.running:
+            messagebox.showinfo("PhotoCull", t("Wait for the current step to finish."),
+                                parent=self)
+            return
+        i18n.set_lang("en" if i18n.is_ar() else "ar")
+        self.settings["language"] = i18n.LANG
+        self.settings.save()
+        self._rebuild_ui()
+
+    def _rebuild_ui(self) -> None:
+        """Destroy and redraw every widget (new language or text size); keeps page and log."""
+        log_text = self.log._textbox.get("1.0", "end-1c")
+        for job in (self._detail_job, self._refresh_job):
+            if job:
+                self.after_cancel(job)
+        self._detail_job = self._refresh_job = None
+        self._detail_item = None
+        self._detail_token += 1
+        for child in self.winfo_children():
+            child.destroy()
+        self._build()
+        self._refresh_styles()
+        self.lbl_folder.configure(text=str(self.layout.main) if self.layout
+                                  else t("No folder chosen"))
+        self._set_ps(*self.ps_state)
+        if log_text.strip():
+            self._append_log(log_text)
+        self._refresh_all()
 
     def _toggle_theme(self) -> None:
         dark = bool(self.theme_switch.get())
@@ -423,18 +721,6 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark" if dark else "light")
         self.settings.save()
         self.grid_view.refresh_colors()
-
-    def _toggle_advanced(self, show: bool | None = None) -> None:
-        if show is None:
-            show = not self.advanced.winfo_viewable()
-        if show:
-            self.advanced.grid()
-            self.btn_adv.configure(text="Advanced ▾")
-        else:
-            self.advanced.grid_remove()
-            self.btn_adv.configure(text="Advanced ▸")
-        self.settings["advanced_open"] = show
-        self.settings.save()
 
     def _reset_advanced(self) -> None:
         self._suppress = True
@@ -448,7 +734,7 @@ class App(ctk.CTk):
         self.settings.save()
 
     def _browse_into(self, var: ctk.StringVar) -> None:
-        d = filedialog.askdirectory(parent=self, title="Choose a folder",
+        d = filedialog.askdirectory(parent=self, title=t("Choose a folder"),
                                     initialdir=str(self.layout.main) if self.layout else None)
         if d:
             var.set(str(Path(d)))
@@ -457,12 +743,12 @@ class App(ctk.CTk):
         names = [p.name for p in list_styles(self.cfg_base)]
         want = self._style_value() or self.settings["style"] or self.cfg_base.photoshop.default_style_file
         if names:
-            self.style_menu.configure(values=[CHOOSE_STYLE] + names)
+            self.style_menu.configure(values=[choose_style()] + names)
             self.style_menu.set(want if want in names else (names[0] if len(names) == 1
-                                                           else CHOOSE_STYLE))
+                                                           else choose_style()))
         else:
-            self.style_menu.configure(values=[CHOOSE_STYLE])
-            self.style_menu.set(CHOOSE_STYLE)
+            self.style_menu.configure(values=[choose_style()])
+            self.style_menu.set(choose_style())
         self.settings["style"] = self._style_value()
 
     def _open_styles(self) -> None:
@@ -472,7 +758,7 @@ class App(ctk.CTk):
 
     # ================================================================== folder
     def _choose_folder(self) -> None:
-        d = filedialog.askdirectory(parent=self, title="Choose the main folder of this coverage",
+        d = filedialog.askdirectory(parent=self, title=t("Choose the main folder of this coverage"),
                                     initialdir=self.settings["main_folder"] or None)
         if d:
             self._set_folder(Path(d), ask_create=True)
@@ -483,13 +769,14 @@ class App(ctk.CTk):
         layout = CoverageLayout.for_main(main)
         if ask_create and not layout.full_coverage.is_dir():
             if messagebox.askyesno(
-                    "PhotoCull", "This folder has no Full_Coverage folder yet.\n\n"
-                    "Create it now? Then copy all the photos of the coverage into it.",
+                    "PhotoCull", t("This folder has no Full_Coverage folder yet.\n\n"
+                                   "Create it now? Then copy all the photos of the coverage "
+                                   "into it."),
                     parent=self):
                 try:
                     layout.full_coverage.mkdir()
                 except OSError as exc:
-                    messagebox.showerror("PhotoCull", f"Could not create the folder:\n{exc}")
+                    messagebox.showerror("PhotoCull", t("Could not create the folder:\n{exc}").format(exc=exc))
         self.layout = layout
         self.settings["main_folder"] = str(layout.main)
         self.settings.save()
@@ -501,6 +788,47 @@ class App(ctk.CTk):
         self.lbl_folder.configure(text=str(layout.main))
         self._clear_log()
         self._refresh_all()
+
+    def _open_doctor(self) -> None:
+        from .doctor_dialog import DoctorDialog
+        DoctorDialog(self, self.cfg_base, self.settings["main_folder"] or None)
+
+    def _export_settings(self) -> None:
+        path = filedialog.asksaveasfilename(
+            parent=self, title=t("Save my settings"), defaultextension=".json",
+            initialfile="PhotoCull settings.json", filetypes=[("Settings", "*.json")])
+        if not path:
+            return
+        try:
+            if self.settings.path.is_file():
+                shutil.copyfile(self.settings.path, path)
+            else:
+                Path(path).write_text("{}", encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("PhotoCull", t("Could not save the settings:\n{exc}").format(exc=exc),
+                                 parent=self)
+
+    def _import_settings(self) -> None:
+        if self.worker and self.worker.running:
+            return
+        path = filedialog.askopenfilename(parent=self, title=t("Load settings from a file"),
+                                          filetypes=[("Settings", "*.json")])
+        if not path:
+            return
+        try:
+            loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("not a PhotoCull settings file")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("PhotoCull", t("This is not a usable settings file:\n{exc}").format(exc=exc),
+                                 parent=self)
+            return
+        for k, v in loaded.items():
+            if k in DEFAULTS and k not in MACHINE_KEYS:
+                self.settings[k] = v
+        self.settings.save()
+        messagebox.showinfo("PhotoCull", t("Settings loaded. Close and open PhotoCull again "
+                                           "to see them all."), parent=self)
 
     def _open_step(self, step: str) -> None:
         if self.layout:
@@ -564,8 +892,8 @@ class App(ctk.CTk):
             rej = max(0, summary.get("total", 0) - n["selected"] - n["alts"])
             by = summary.get("rejected_by_reason", {})
             expo = by.get("overexposed", 0) + by.get("underexposed", 0)
-            parts = [f"blurry {by.get('blurry', 0)}", f"eyes {by.get('closed_eyes', 0)}",
-                     f"exposure {expo}"]
+            parts = [f"{t('blurry')} {by.get('blurry', 0)}",
+                     f"{t('eyes')} {by.get('closed_eyes', 0)}", f"{t('exposure')} {expo}"]
             self.card_rejected.set(rej, " · ".join(p for p in parts if not p.endswith(" 0")) or " ")
         else:
             self.card_rejected.set("–")
@@ -573,14 +901,16 @@ class App(ctk.CTk):
             mpp = max_per_post(self.settings, self.cfg_base)
             sel = n["selected"]
             if sel == 0:
-                self.lbl_predict.configure(text="Run step 1 to see how many posts you will get.")
+                self.lbl_predict.configure(
+                    text=t("Run step 1 to see how many posts you will get."))
             else:
                 sizes = distribute(sel, mpp)
-                self.lbl_predict.configure(
-                    text=f"{sel} selected  →  {len(sizes)} post{'s' if len(sizes) != 1 else ''}"
-                         f"  →  {'/'.join(map(str, sizes))}")
+                tpl = ("{sel} selected  →  {n} post  →  {sizes}" if len(sizes) == 1
+                       else "{sel} selected  →  {n} posts  →  {sizes}")
+                self.lbl_predict.configure(text=t(tpl).format(
+                    sel=sel, n=len(sizes), sizes="/".join(map(str, sizes))))
         except SettingsError:
-            self.lbl_predict.configure(text="Type a whole number for “Max images per post”.")
+            self.lbl_predict.configure(text=t("Type a whole number for “Max images per post”."))
 
     def _refresh_cards(self) -> None:
         status = {}
@@ -590,44 +920,46 @@ class App(ctk.CTk):
         for step in STEPS:
             text, kind = self.transient.get(step) or STATE_TEXT.get(
                 status.get(step, "not_started"), ("Not started", "idle"))
-            self.cards[step].set_status(text, kind)
+            self.cards[step].set_status(t(text), kind)
         lay = self.layout
         for step, folder in (("cull", lay.selected if lay else None),
                              ("edit", lay.edited if lay else None),
                              ("split", lay.posts if lay else None)):
             ok = bool(folder and folder.is_dir())
-            self.cards[step].set_folder_available(ok, "Not created yet: run this step first.")
+            self.cards[step].set_folder_available(ok, t("Not created yet: run this step first."))
 
     def _update_buttons(self) -> None:
         running = bool(self.worker and self.worker.running)
         n = getattr(self, "_n", dict(full=0, selected=0, edit_in=0, split_in=0))
         lay = self.layout
         ps = self.ps_state[0]
-        busy = "Wait for the current step to finish, or press Stop."
-        no_folder = "Choose a main folder first."
+        busy = t("Wait for the current step to finish, or press Stop.")
+        no_folder = t("Choose a main folder first.")
 
         def cull_why():
             if running: return busy
             if not lay: return no_folder
             if n["full"] == 0:
-                return ("No photos found. Copy the photos into the Full_Coverage folder first."
+                return (t("No photos found. Copy the photos into the Full_Coverage folder first.")
                         if not str(self.settings["cull_input"]).strip()
-                        else "No photos in the folder chosen under Advanced → Cull reads from.")
+                        else t("No photos in the folder chosen under Settings → Folders → Cull reads from."))
             return ""
 
         def edit_why():
             if running: return busy
             if not lay: return no_folder
-            if not self._style_value(): return "Choose a style first (a .psd file in the Styles folder)."
-            if ps == "missing": return "Photoshop is not installed on this PC."
-            if ps == "no_pywin32": return "The Photoshop link is missing. Run First-Time Setup again."
-            if n["edit_in"] == 0: return "Nothing to edit yet. Run step 1 first."
+            if not self._style_value():
+                return t("Choose a style first (a .psd file in the Styles folder).")
+            if ps == "missing": return t("Photoshop is not installed on this PC.")
+            if ps == "no_pywin32":
+                return t("The Photoshop link is missing. Run First-Time Setup again.")
+            if n["edit_in"] == 0: return t("Nothing to edit yet. Run step 1 first.")
             return ""
 
         def split_why():
             if running: return busy
             if not lay: return no_folder
-            if n["split_in"] == 0: return "Nothing to split yet. Run step 2 first."
+            if n["split_in"] == 0: return t("Nothing to split yet. Run step 2 first.")
             return ""
 
         def all_why():
@@ -637,10 +969,10 @@ class App(ctk.CTk):
             self.cards[step].set_enabled(not why, why)
         why = all_why()
         if not why and not self._style_value():
-            why = "Choose a style first (a .psd file in the Styles folder)."
+            why = t("Choose a style first (a .psd file in the Styles folder).")
         # Run All starts from step 1, so only step 1's needs and Photoshop/style must hold.
         if not why and ps in ("missing", "no_pywin32"):
-            why = "Photoshop is not ready, so step 2 cannot run."
+            why = t("Photoshop is not ready, so step 2 cannot run.")
         if not why and running:
             why = busy
         self.btn_all.configure(state="disabled" if why else "normal")
@@ -652,13 +984,14 @@ class App(ctk.CTk):
     # ================================================================== review grid
     def _seg_labels(self) -> None:
         rv = self.review
-        self.seg.configure(values=[f"Selected ({len(rv.selected)})",
-                                   f"Alternates ({len(rv.alternates)})"])
-        self.seg.set(f"Selected ({len(rv.selected)})" if self.view == "selected"
-                     else f"Alternates ({len(rv.alternates)})")
+        sel = t("Selected ({n})").format(n=len(rv.selected))
+        alt = t("Alternates ({n})").format(n=len(rv.alternates))
+        self.seg.configure(values=[sel, alt])
+        self.seg.set(sel if self.view == "selected" else alt)
+        self.nav_btns["review"].configure(text=self._nav_text("review"))
 
     def _on_view(self, label: str) -> None:
-        self.view = "selected" if label.startswith("Selected") else "alternates"
+        self.view = "selected" if label.startswith(t("Selected")) else "alternates"
         self._fill_grid(keep=False)
 
     def _fill_grid(self, keep: bool) -> None:
@@ -668,13 +1001,13 @@ class App(ctk.CTk):
         for it in items:
             badge, kind = "", "warn"
             if USER_PICK in it.row.get("reasons", ""):
-                badge, kind = "your pick", "done"
+                badge, kind = t("your pick"), "done"
             elif it.row.get("weak_group") == "yes":
-                badge = "check me"
+                badge = t("check me")
             gi.append(GridItem(str(it.path), it.path, it.path.name, badge, kind))
         self.grid_view.empty_text = (
-            "No photos here yet. Run step 1 (Cull)." if self.view == "selected"
-            else "No alternates (they appear after Cull).")
+            t("No photos here yet. Run step 1 (Cull).") if self.view == "selected"
+            else t("No alternates (they appear after Cull)."))
         self.grid_view.set_items(gi, keep_selection=keep)
 
     def _find(self, key: str | None) -> PickItem | None:
@@ -700,7 +1033,7 @@ class App(ctk.CTk):
             self._detail_job = None
         if it is None:
             self.preview.configure(image=None, text="")
-            self.lbl_name.configure(text="Select a photo")
+            self.lbl_name.configure(text=t("Select a photo"))
             self.lbl_info.configure(text="")
             self._sync_detail_buttons()
             return
@@ -708,20 +1041,24 @@ class App(ctk.CTk):
         self.lbl_name.configure(text=it.path.name)
         lines = []
         if r:
-            lines.append(f"Moment {r.get('group_id', '?')}: {r.get('group_size', '?')} photo(s), "
-                         f"this one ranks #{r.get('rank_in_group', '?')}")
-            lines.append(f"Sharpness {_num(r.get('sharpness'))}   Brightness "
-                         f"{_num(r.get('mean_brightness'))}   Score {_num(r.get('total_score'), 2)}")
-            lines.append(f"Face: {r.get('face_found', '?')}   Eyes: {r.get('eyes_state') or '?'}")
-            why = [REASON_TEXT.get(t, t) for t in r.get("reasons", "").split(";") if t]
+            lines.append(t("Moment {g}: {size} photo(s), this one ranks #{rank}").format(
+                g=r.get("group_id", "?"), size=r.get("group_size", "?"),
+                rank=r.get("rank_in_group", "?")))
+            lines.append(t("Sharpness {sharp}   Brightness {bright}   Score {score}").format(
+                sharp=_num(r.get("sharpness")), bright=_num(r.get("mean_brightness")),
+                score=_num(r.get("total_score"), 2)))
+            lines.append(t("Face: {face}   Eyes: {eyes}").format(
+                face=t(str(r.get("face_found", "?"))), eyes=t(str(r.get("eyes_state") or "?"))))
+            why = [t(REASON_TEXT.get(code, code)) for code in r.get("reasons", "").split(";")
+                   if code]
             if why:
-                lines.append("Notes: " + "; ".join(why))
+                lines.append(t("Notes: ") + "; ".join(why))
             if r.get("weak_group") == "yes":
-                lines.append("The program was not sure about this moment. Please check it.")
+                lines.append(t("The program was not sure about this moment. Please check it."))
         else:
-            lines.append("No score: this photo was not made by the Cull step.")
+            lines.append(t("No score: this photo was not made by the Cull step."))
         self.lbl_info.configure(text="\n".join(lines))
-        self.preview.configure(image=None, text="loading…")
+        self.preview.configure(image=None, text=t("loading…"))
         token = self._detail_token
         fut = self.loader.submit(it.path, 560)
         self._detail_job = self.after(40, lambda: self._poll_detail(fut, token))
@@ -735,7 +1072,7 @@ class App(ctk.CTk):
             self._detail_job = self.after(40, lambda: self._poll_detail(fut, token))
             return
         if fut.exception() is not None:
-            self.preview.configure(image=None, text="(cannot show this photo)")
+            self.preview.configure(image=None, text=t("(cannot show this photo)"))
             return
         im = fut.result()
         scale = min(1.0, 300 / im.width, PREVIEW_H / im.height)
@@ -754,18 +1091,20 @@ class App(ctk.CTk):
         self.btn_b.grid()
         if it.kind == "selected":
             alts = self.review.alternates_of(it)
-            self.btn_a.configure(text="Swap with another frame of this moment")
-            self.btn_b.configure(text="Remove from Selected")
-            a_why = "Wait for the current step to finish." if running else (
-                "" if alts else "This moment has no alternates.")
-            b_why = "Wait for the current step to finish." if running else ""
+            wait = t("Wait for the current step to finish.")
+            self.btn_a.configure(text=t("Swap with another frame of this moment"))
+            self.btn_b.configure(text=t("Remove from Selected"))
+            a_why = wait if running else ("" if alts else t("This moment has no alternates."))
+            b_why = wait if running else ""
         else:
             sel = self.review.selected_of(it)
-            self.btn_a.configure(text="Use this instead of the pick" if sel else "Add to Selected")
-            self.btn_b.configure(text="Also add to Selected")
-            a_why = "Wait for the current step to finish." if running else ""
-            b_why = "Wait for the current step to finish." if running else (
-                "" if sel else "It is the only one, use the button above.")
+            wait = t("Wait for the current step to finish.")
+            self.btn_a.configure(text=t("Use this instead of the pick") if sel
+                                 else t("Add to Selected"))
+            self.btn_b.configure(text=t("Also add to Selected"))
+            a_why = wait if running else ""
+            b_why = wait if running else (
+                "" if sel else t("It is the only one, use the button above."))
             if not sel:
                 self.btn_b.grid_remove()
         for btn, tip, why in ((self.btn_a, self.tip_a, a_why), (self.btn_b, self.tip_b, b_why)):
@@ -799,20 +1138,21 @@ class App(ctk.CTk):
                     move_pick(lay, it.path, "selected")
         except Exception as exc:
             logging.getLogger("photocull").exception("Swap failed")
-            messagebox.showerror("PhotoCull", f"Could not change the pick:\n{exc}")
+            messagebox.showerror("PhotoCull", t("Could not change the pick:\n{exc}").format(exc=exc))
             self._refresh_all()
             return
         stale = stale_edits(lay, demoted)
         if stale:
             ans = ask_choice(
-                self, "Edited photo",
-                f"{', '.join(Path(s).name for s in stale)} was already edited, but is no longer "
-                "picked. Delete the edited copy so it does not end up in your posts?\n"
-                "(Photos in Full_Coverage and Alternates are not touched.)",
-                [("Delete the edited copy", "delete")], cancel_label="Keep it")
+                self, t("Edited photo"),
+                t("{names} was already edited, but is no longer picked. Delete the edited copy "
+                  "so it does not end up in your posts?\n(Photos in Full_Coverage and "
+                  "Alternates are not touched.)").format(
+                    names=", ".join(Path(s).name for s in stale)),
+                [(t("Delete the edited copy"), "delete")], cancel_label=t("Keep it"))
             if ans == "delete":
                 drop_edits(lay, demoted)
-        self._append_log("Pick changed. Run step 2 again to edit the new photo.")
+        self._append_log(t("Pick changed. Run step 2 again to edit the new photo."))
         self._detail_item = None
         self._refresh_all()
         self.grid_view.select(None)
@@ -820,9 +1160,9 @@ class App(ctk.CTk):
     def _choose_alternate(self, alts: list[PickItem]) -> PickItem | None:
         picked: dict = {"item": None}
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Choose the photo to use")
+        dlg.title(t("Choose the photo to use"))
         dlg.transient(self)
-        ctk.CTkLabel(dlg, text="Click the photo you want, then press Use this photo.",
+        ctk.CTkLabel(dlg, text=t("Click the photo you want, then press Use this photo."),
                      font=(FONT, 13)).pack(padx=16, pady=(14, 6))
         sel: dict = {"gi": None}
         grid = ThumbGrid(dlg, self.loader, self.cache, lambda gi: sel.update(gi=gi))
@@ -836,7 +1176,7 @@ class App(ctk.CTk):
             if picked["item"]:
                 dlg.destroy()
 
-        ctk.CTkButton(dlg, text="Use this photo", command=ok).pack(pady=(4, 14))
+        ctk.CTkButton(dlg, text=t("Use this photo"), command=ok).pack(pady=(4, 14))
         dlg.after(120, lambda: dlg.winfo_exists() and (dlg.grab_set(), dlg.focus_force()))
         self.wait_window(dlg)
         return picked["item"]
@@ -851,7 +1191,7 @@ class App(ctk.CTk):
             try:
                 action = parse_action(str(s["action"]) or cfg.photoshop.default_action)
             except ValueError as exc:
-                raise SettingsError(f"Photoshop Action: {exc}") from None
+                raise SettingsError(t("Photoshop Action: {exc}").format(exc=exc)) from None
         mpp = max_per_post(s, cfg)
 
         def folder(key):
@@ -909,7 +1249,7 @@ class App(ctk.CTk):
         self.progress.configure(mode="indeterminate")
         self.progress.start()
         self.lbl_progress.configure(text=self._starting_text(kind), text_color=("gray10", "gray90"))
-        self._append_log(f"--- {'Run All' if kind == 'all' else STEP_TITLES[kind]} ---")
+        self._append_log(f"--- {t('Run All') if kind == 'all' else t(STEP_TITLES[kind])} ---")
         self._refresh_cards()
         self._update_buttons()
         self.worker.start()
@@ -917,14 +1257,14 @@ class App(ctk.CTk):
     @staticmethod
     def _starting_text(kind: str) -> str:
         if kind in ("edit", "all"):
-            return "Starting… (Photoshop can take up to 30 seconds to open)"
-        return "Starting…"
+            return t("Starting… (Photoshop can take up to 30 seconds to open)")
+        return t("Starting…")
 
     def _stop(self) -> None:
         if self.worker and self.worker.running:
             self.worker.cancel.set()
             self.btn_stop.configure(state="disabled")
-            self.lbl_progress.configure(text="Stopping after the current photo…")
+            self.lbl_progress.configure(text=t("Stopping after the current photo…"))
 
     def _poll(self) -> None:
         if self._destroyed:
@@ -983,7 +1323,8 @@ class App(ctk.CTk):
                 self.progress.stop()
                 self.progress.configure(mode="determinate")
             self.progress.set(min(1.0, done / total))
-        step = f"Step {STEPS.index(self.cur_step) + 1}/3 · {STEP_TITLES[self.cur_step]}  —  " \
+        step = t("Step {i}/3 · {title}  —  ").format(
+            i=STEPS.index(self.cur_step) + 1, title=t(STEP_TITLES[self.cur_step])) \
             if self.run_kind == "all" and self.cur_step else ""
         text = f"{step}{min(done + (1 if name else 0), total)} / {total}" if total else step + "…"
         self.lbl_progress.configure(text=f"{text}   {name}".rstrip(),
@@ -1030,7 +1371,7 @@ class App(ctk.CTk):
                 self.transient.pop(step)
         self._probe_paused = False
         self._ps_q.put(("unknown", ""))
-        msg = res.message or ("Done." if res.ok else "Something went wrong.")
+        msg = tr_msg(res.message) or (t("Done.") if res.ok else t("Something went wrong."))
         color = ("#1b6b2f", "#8fe3a5") if res.ok else (
             ("#8a5a00", "#ffd27a") if res.cancelled or res.data.get("preview_done")
             or res.data.get("declined") else ("#9b1c1c", "#ff9b9b"))
@@ -1040,7 +1381,8 @@ class App(ctk.CTk):
         for err in res.errors[:5]:
             self._append_log("  " + err, error=True)
         if len(res.errors) > 5:
-            self._append_log(f"  …and {len(res.errors) - 5} more (see the log).", error=True)
+            self._append_log(t("  …and {n} more (see the log).").format(n=len(res.errors) - 5),
+                             error=True)
         self.worker_result = res
         self.worker = None
         self._refresh_all()
@@ -1064,30 +1406,31 @@ class App(ctk.CTk):
         step, res, choices = p["step"], p["res"], p["choices"]
         n = res.data.get("existing", 0)
         if step == "cull":
-            msg = (f"Selected and Alternates already hold {n} photo(s) from an earlier run.\n\n"
-                   "Replace them with the new picks? (The photos in Full_Coverage are never "
-                   "touched.)")
-            opts = [("Replace them", "clear")]
+            msg = t("Selected and Alternates already hold {n} photo(s) from an earlier "
+                    "run.\n\nReplace them with the new picks? (The photos in Full_Coverage "
+                    "are never touched.)").format(n=n)
+            opts = [(t("Replace them"), "clear")]
         elif step == "edit":
-            msg = (f"{n} photo(s) were already edited with different settings (style, action "
-                   "or exposure).\n\nEdit them again with the new settings? The old edited "
-                   "copies will be replaced.")
-            opts = [("Edit them again", "reprocess")]
+            msg = t("{n} photo(s) were already edited with different settings (style, "
+                    "action or exposure).\n\nEdit them again with the new settings? The old "
+                    "edited copies will be replaced.").format(n=n)
+            opts = [(t("Edit them again"), "reprocess")]
         else:
-            msg = (f"Posts already has {n} post folder(s).\n\nDelete the old Post_N folders "
-                   "and start again, or add new posts after them?")
-            opts = [("Delete the old posts", "clear"), ("Add new posts", "new")]
+            msg = t("Posts already has {n} post folder(s).\n\nDelete the old Post_N folders "
+                    "and start again, or add new posts after them?").format(n=n)
+            opts = [(t("Delete the old posts"), "clear"), (t("Add new posts"), "new")]
         if "keep" in choices:
-            opts.append(("Keep them and continue", "keep"))
-        return ask_choice(self, STEP_TITLES[step], msg, opts)
+            opts.append((t("Keep them and continue"), "keep"))
+        return ask_choice(self, t(STEP_TITLES[step]), msg, opts)
 
     def _preview_dialog(self, res: StepResult) -> bool:
         while True:
             ans = ask_choice(
-                self, "Preview ready",
-                f"{res.message}\n\nOpen the Edited folder and check how the photos look. "
-                "Continue with the rest?",
-                [("Open Edited folder", "open"), ("Continue", "go")], cancel_label="Stop here")
+                self, t("Preview ready"),
+                t("{message}\n\nOpen the Edited folder and check how the photos look. "
+                  "Continue with the rest?").format(message=tr_msg(res.message)),
+                [(t("Open Edited folder"), "open"), (t("Continue"), "go")],
+                cancel_label=t("Stop here"))
             if ans == "open" and self.layout:
                 _open_path(self.layout.edited)
                 continue
@@ -1125,8 +1468,9 @@ class App(ctk.CTk):
     def _set_ps(self, state: str, detail: str) -> None:
         self.ps_state = (state, detail)
         color, text = PS_TEXT[state]
+        text = t(text)
         if state == "open" and detail:
-            text = f"Photoshop {detail} is ready"
+            text = t("Photoshop {v} is ready").format(v=detail)
         self.ps_dot.configure(text_color=color)
         self.ps_text.configure(text=text)
         self._update_buttons()
@@ -1151,19 +1495,21 @@ class App(ctk.CTk):
         except OSError:
             pass
         try:
-            self._append_log(f"Something went wrong in the window: {val}. "
-                             "Details are in the logs folder.", error=True)
+            self._append_log(t("Something went wrong in the window: {err}. "
+                               "Details are in the logs folder.").format(err=val), error=True)
         except Exception:
             pass
 
     def _on_close(self) -> None:
         if self.worker and self.worker.running:
-            if not messagebox.askyesno("PhotoCull", "A step is still running.\n\n"
-                                       "Stop it and close the window?", parent=self):
+            if not messagebox.askyesno("PhotoCull", t("A step is still running.\n\n"
+                                                      "Stop it and close the window?"),
+                                       parent=self):
                 return
             self._closing = True
             self.worker.cancel.set()
-            self.lbl_progress.configure(text="Stopping after the current photo, then closing…")
+            self.lbl_progress.configure(
+                text=t("Stopping after the current photo, then closing…"))
             self.after(20000, self._destroy)              # never hang forever
             return
         self._destroy()

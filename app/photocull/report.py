@@ -7,6 +7,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from .state import replace_with_retry
+
 COLUMNS = ["filename", "capture_time", "group_id", "group_size", "rank_in_group",
            "sharpness", "mean_brightness", "blown_pct", "crushed_pct", "contrast",
            "face_found", "eyes_state", "total_score", "result", "reasons", "weak_group"]
@@ -24,7 +26,7 @@ def write_report(path: Path | str, rows: list[dict]) -> None:
             w.writeheader()
             for r in rows:
                 w.writerow({k: r.get(k, "") for k in COLUMNS})
-        os.replace(tmp, path)
+        replace_with_retry(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

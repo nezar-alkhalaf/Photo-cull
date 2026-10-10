@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import __version__
@@ -10,9 +11,6 @@ from .config import ConfigError, load_config
 from .logsetup import setup_logging
 from .paths import CoverageLayout, SafetyError, preflight
 
-NOT_YET = {
-    "doctor": "Stage 6",
-}
 HELP = {
     "init": "create the output folders inside a coverage folder",
     "cull": "step 1: pick the best frame of each burst",
@@ -35,6 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("folder", help="main coverage folder (contains Full_Coverage)")
         if name in ("cull", "edit", "split"):
             sp.add_argument("--input", help="override the input folder for this step")
+        if name == "doctor":
+            sp.add_argument("--connect", action="store_true",
+                            help="also start Photoshop and test the connection (can take 30 s)")
+            sp.add_argument("--folder", help="also check this coverage folder (default: the last one)")
         if name == "cull":
             sp.add_argument("--mode", choices=["portrait", "action"], default="portrait",
                             help="portrait/class (eyes matter) or action/match (sharpness matters)")
@@ -78,6 +80,8 @@ def _utf8_output() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _utf8_output()
+    os.environ.setdefault("GLOG_minloglevel", "2")        # MediaPipe's C++ log noise
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
@@ -104,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(layout.log, console=True).info("Initialised %s", layout.main)
         return 0
 
+    if args.command == "doctor":
+        return _cmd_doctor(args, cfg)
     if args.command == "gui":
         from .gui.app import main as gui_main
         return gui_main(cfg)
@@ -116,9 +122,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "edit":
         return _cmd_edit(args, cfg)
 
-    print(f"'{args.command}' is not implemented yet (planned for {NOT_YET[args.command]}).",
-          file=sys.stderr)
-    return 3
+    parser.error(f"unknown command {args.command}")
+    return 2
+
+
+def _cmd_doctor(args, cfg) -> int:
+    from .doctor import exit_code, format_report, run_doctor
+    from .gui.settings import UserSettings
+
+    folder = args.folder or UserSettings()["main_folder"] or None
+    checks = run_doctor(cfg, folder, connect_photoshop=args.connect)
+    print(format_report(checks))
+    return exit_code(checks)
 
 
 def _print_progress(done: int, total: int, name: str) -> None:

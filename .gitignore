@@ -5,3 +5,4 @@ app/logs/
 app/settings.json
 *.tmp
 Styles/*.psd
+*.lnk

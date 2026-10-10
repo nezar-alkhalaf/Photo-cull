@@ -10,9 +10,21 @@ from typing import Callable
 import customtkinter as ctk
 from PIL import ImageTk
 
+from .i18n import anchor, is_ar, justify, mcol, px, side, sticky, t
 from .thumbs import LRU, ThumbLoader, file_key
 
 FONT = "Segoe UI"
+TEXT_SCALE = 1.0          # the window's text-size setting; the canvas and tooltips follow it
+
+
+def set_text_scale(scale: float) -> None:
+    global TEXT_SCALE
+    TEXT_SCALE = scale
+
+
+def pt(size: int) -> int:
+    """A point size for tk-native text (canvas, tooltip) that follows the text-size setting."""
+    return max(1, round(size * TEXT_SCALE))
 
 # badge colour per status kind: (text colour, fill colour) for light / dark mode
 BADGE_COLORS = {
@@ -74,9 +86,9 @@ class Tooltip:
         x = self.widget.winfo_pointerx() + 12
         y = self.widget.winfo_pointery() + 18
         tip.wm_geometry(f"+{x}+{y}")
-        tk.Label(tip, text=self.text, justify="left", wraplength=320, padx=8, pady=5,
+        tk.Label(tip, text=self.text, justify=justify(), wraplength=int(320 * TEXT_SCALE), padx=8, pady=5,
                  bg="#2b2b2b", fg="#f2f2f2", relief="solid", bd=1,
-                 font=(FONT, 10)).pack()
+                 font=(FONT, pt(10))).pack()
         self._tip = tip
 
 
@@ -106,27 +118,27 @@ class StepCard(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=14, pady=(6, 0))
-        top.columnconfigure(0, weight=1)
-        ctk.CTkLabel(top, text=title, font=(FONT, 15, "bold"), anchor="w").grid(
-            row=0, column=0, sticky="w")
-        self.badge = ctk.CTkLabel(top, text="Not started", font=(FONT, 11, "bold"),
+        top.columnconfigure(mcol(0, 2), weight=1)
+        ctk.CTkLabel(top, text=title, font=(FONT, 15, "bold"), anchor=anchor()).grid(
+            row=0, column=mcol(0, 2), sticky=sticky("w"))
+        self.badge = ctk.CTkLabel(top, text=t("Not started"), font=(FONT, 11, "bold"),
                                   corner_radius=8, width=96, height=24)
-        self.badge.grid(row=0, column=1, sticky="e")
+        self.badge.grid(row=0, column=mcol(1, 2), sticky=sticky("e"))
         self.button = ctk.CTkButton(self, text=button_text, height=36, font=(FONT, 14, "bold"),
                                     command=on_run)
         self.button.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 2))
-        self.desc = ctk.CTkLabel(self, text=description, font=(FONT, 11), anchor="w",
-                                 justify="left", wraplength=250,
+        self.desc = ctk.CTkLabel(self, text=description, font=(FONT, 11), anchor=anchor(),
+                                 justify=justify(), wraplength=250,
                                  text_color=("gray30", "gray70"))
         self.desc.grid(row=2, column=0, sticky="ew", padx=14)
-        self.link = ctk.CTkButton(self, text="Open folder", width=90, height=22,
+        self.link = ctk.CTkButton(self, text=t("Open folder"), width=90, height=22,
                                   font=(FONT, 11, "underline"), fg_color="transparent",
                                   hover=False, text_color=("#1a62b8", "#7ab7ff"),
                                   command=on_open)
-        self.link.grid(row=3, column=0, sticky="w", padx=10, pady=(0, 4))
+        self.link.grid(row=3, column=0, sticky=sticky("w"), padx=10, pady=(0, 4))
         self.tip = Tooltip(self.button)
         self.link_tip = Tooltip(self.link)
-        self.set_status("Not started", "idle")
+        self.set_status(t("Not started"), "idle")
 
     def set_status(self, text: str, kind: str) -> None:
         light, dark = BADGE_COLORS[kind]
@@ -168,19 +180,21 @@ class ThumbGrid(ctk.CTkFrame):
         self._pending: dict[tuple, object] = {}
         self._paint_job = None
         self._poll_job = None
-        self.columnconfigure(0, weight=1)
+        self.columnconfigure(0, weight=0)
         self.rowconfigure(0, weight=1)
         self.canvas = tk.Canvas(self, highlightthickness=0, bd=0)
-        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(mcol(0, 2), weight=1)
+        self.columnconfigure(mcol(1, 2), weight=0)
+        self.canvas.grid(row=0, column=mcol(0, 2), sticky="nsew")
         self.scroll = ctk.CTkScrollbar(self, command=self.canvas.yview)
-        self.scroll.grid(row=0, column=1, sticky="ns")
+        self.scroll.grid(row=0, column=mcol(1, 2), sticky="ns")
         self.canvas.configure(yscrollcommand=self._on_yscroll)
         self.canvas.bind("<Configure>", lambda e: self._relayout())
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Double-Button-1>", self._double)
         self.canvas.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._wheel))
         self.canvas.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
-        self.empty_text = "Nothing here yet."
+        self.empty_text = t("Nothing here yet.")
         self._scale = 1.0
         self._cols = 1
 
@@ -212,7 +226,7 @@ class ThumbGrid(ctk.CTkFrame):
 
     # ---- layout
     def _metrics(self):
-        self._scale = max(1.0, self.winfo_fpixels("1i") / 96)
+        self._scale = max(1.0, self.winfo_fpixels("1i") / 96) * TEXT_SCALE
         s = self._scale
         return int(self.BASE_W * s), int(self.BASE_H * s), int(self.BASE_THUMB * s)
 
@@ -225,6 +239,10 @@ class ThumbGrid(ctk.CTkFrame):
         if reset_scroll:
             self.canvas.yview_moveto(0)
         self.refresh_colors()
+
+    def _width(self) -> int:
+        """Width of the drawing area (the right edge is where Arabic cells start)."""
+        return max(self.canvas.winfo_width(), self._metrics()[0])
 
     def _on_yscroll(self, lo, hi) -> None:
         self.scroll.set(lo, hi)
@@ -248,7 +266,7 @@ class ThumbGrid(ctk.CTkFrame):
         c.configure(bg=bg)
         if not self.items:
             c.create_text(c.winfo_width() / 2, 60, text=self.empty_text,
-                          fill=pick(("gray40", "gray60")), font=(FONT, 12))
+                          fill=pick(("gray40", "gray60")), font=(FONT, pt(12)))
             return
         top = c.canvasy(0)
         first_row = max(0, int(top // ch))
@@ -259,7 +277,8 @@ class ThumbGrid(ctk.CTkFrame):
                 i = row * self._cols + col
                 if i >= len(self.items):
                     break
-                visible_keys.add(self._paint_cell(i, col * cw, row * ch, cw, ch, th, card))
+                x = (self._width() - (col + 1) * cw) if is_ar() else col * cw
+                visible_keys.add(self._paint_cell(i, x, row * ch, cw, ch, th, card))
         for key in [k for k in self._pending if k not in visible_keys]:
             self._pending.pop(key).cancel()                  # scrolled away before it started
         if self._pending and self._poll_job is None:
@@ -278,18 +297,18 @@ class ThumbGrid(ctk.CTkFrame):
         if photo is not None:
             c.create_image(cx, cy, image=photo)
         else:
-            c.create_text(cx, cy, text="…", fill=pick(("gray50", "gray55")), font=(FONT, 20))
+            c.create_text(cx, cy, text="…", fill=pick(("gray50", "gray55")), font=(FONT, pt(20)))
             if key not in self._pending:
                 self._pending[key] = self.loader.submit(item.path, th)
         c.create_text(cx, y + ch - int(22 * s), text=_shorten(item.caption, 24),
-                      fill=pick(("gray15", "gray85")), font=(FONT, 9))
+                      fill=pick(("gray15", "gray85")), font=(FONT, pt(9)))
         if item.badge:
             light, dark = BADGE_COLORS[item.badge_kind]
             col = (light, dark)[mode_index()]
             c.create_rectangle(x + pad + 8, y + pad + 8, x + pad + 8 + int(7 * s * len(item.badge)) + 10,
                                y + pad + 8 + int(18 * s), fill=col[1], outline=col[0])
             c.create_text(x + pad + 13, y + pad + 8 + int(9 * s), text=item.badge, anchor="w",
-                          fill=col[0], font=(FONT, 9, "bold"))
+                          fill=col[0], font=(FONT, pt(9), "bold"))
         return key
 
     def _poll(self) -> None:
@@ -311,7 +330,8 @@ class ThumbGrid(ctk.CTkFrame):
     # ---- mouse
     def _index_at(self, e) -> int | None:
         cw, ch, _ = self._metrics()
-        col = int(self.canvas.canvasx(e.x) // cw)
+        cx = self.canvas.canvasx(e.x)
+        col = int((self._width() - cx) // cw) if is_ar() else int(cx // cw)
         row = int(self.canvas.canvasy(e.y) // ch)
         if col >= self._cols or col < 0 or row < 0:
             return None
@@ -346,14 +366,14 @@ def _shorten(text: str, n: int) -> str:
 
 # ------------------------------------------------------------------ dialogs
 def ask_choice(parent, title: str, message: str, options: list[tuple[str, str]],
-               cancel_label: str = "Cancel") -> str | None:
+               cancel_label: str | None = None) -> str | None:
     """Modal dialog with one button per option; returns the option's value or None."""
     dlg = ctk.CTkToplevel(parent)
     dlg.title(title)
     dlg.resizable(False, False)
     dlg.transient(parent)
     result: dict = {"value": None}
-    ctk.CTkLabel(dlg, text=message, font=(FONT, 13), justify="left", wraplength=440).pack(
+    ctk.CTkLabel(dlg, text=message, font=(FONT, 13), justify=justify(), wraplength=440).pack(
         padx=22, pady=(20, 14))
     row = ctk.CTkFrame(dlg, fg_color="transparent")
     row.pack(padx=18, pady=(0, 18))
@@ -364,10 +384,10 @@ def ask_choice(parent, title: str, message: str, options: list[tuple[str, str]],
 
     for label, value in options:
         ctk.CTkButton(row, text=label, command=lambda v=value: choose(v), height=34).pack(
-            side="left", padx=5)
-    ctk.CTkButton(row, text=cancel_label, command=lambda: choose(None), height=34,
+            side=side("left"), padx=5)
+    ctk.CTkButton(row, text=cancel_label or t("Cancel"), command=lambda: choose(None), height=34,
                   fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"),
-                  text_color=("gray10", "gray95")).pack(side="left", padx=5)
+                  text_color=("gray10", "gray95")).pack(side=side("left"), padx=5)
     dlg.protocol("WM_DELETE_WINDOW", lambda: choose(None))
     dlg.update_idletasks()
     x = parent.winfo_rootx() + (parent.winfo_width() - dlg.winfo_reqwidth()) // 2

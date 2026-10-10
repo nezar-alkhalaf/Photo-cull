@@ -107,7 +107,7 @@ def test_swap_from_the_window_and_split_runs_through_the_worker(app, tmp_path, m
     app._act("b")                                            # remove from Selected
     assert pump(app, lambda: len(app.grid_view.items) == 1)
 
-    # step 3 straight from the window: Edited is empty, so point it at Selected via Advanced
+    # step 3 straight from the window: Edited is empty, so point it at Selected via Settings
     app.adv_vars["split_input"].set(str(lay.selected))
     assert pump(app, lambda: app._n["split_in"] == 1)
     app._start("split")
@@ -115,3 +115,90 @@ def test_swap_from_the_window_and_split_runs_through_the_worker(app, tmp_path, m
     assert pump(app, lambda: app.worker is None)
     assert [p.name for p in (lay.posts / "Post_1").iterdir()] == ["q.jpg"]
     assert app.cards["split"].badge.cget("text") == "Done ✓"
+
+
+def test_language_button_redraws_the_window_in_arabic_and_back(app, tmp_path):
+    from photocull.gui import i18n
+
+    lay = make_coverage(tmp_path)
+    assert run_cull(lay, Config(), "portrait", detector=FakeDetector()).ok
+    app._set_folder(lay.main, ask_create=False)
+    assert pump(app, lambda: app._n["selected"] == 2)
+    try:
+        assert app.btn_lang.cget("text") == "العربية"
+        app._toggle_language()
+        app.update()
+        assert i18n.LANG == "ar" and app.settings["language"] == "ar"
+        assert app.btn_lang.cget("text") == "English"
+        assert "اختر" in app.btn_folder.cget("text")
+        assert str(lay.main) == app.lbl_folder.cget("text")
+        assert pump(app, lambda: len(app.grid_view.items) == 2)
+        assert "مختارة" in app.lbl_predict.cget("text")
+        assert app.seg.get().endswith("(2)")
+        app._toggle_language()
+        app.update()
+        assert i18n.LANG == "en" and app.btn_folder.cget("text") == "Choose folder…"
+        assert "selected" in app.lbl_predict.cget("text")
+    finally:
+        i18n.set_lang("en")
+
+
+def test_sidebar_pages_switch_and_survive_a_language_change(app, tmp_path):
+    from photocull.gui import i18n
+
+    assert set(app.pages) == {"home", "review", "settings", "activity"}
+    assert app.page_key == "home"
+    for key in ("review", "settings", "activity", "home"):
+        app.show_page(key)
+        app.update()
+        assert app.page_key == key
+        on = [k for k, b in app.nav_btns.items() if b.cget("fg_color") != "transparent"]
+        assert on == [key]
+    app.show_page("settings")
+    try:
+        app._toggle_language()
+        app.update()
+        assert app.page_key == "settings"
+        assert "الإعدادات" in app.nav_btns["settings"].cget("text")
+        # settings typed on the Settings page are kept across the redraw
+        app.adv_vars["blurry_sharpness"].set("12")
+        app._toggle_language()
+        app.update()
+        assert app.adv_vars["blurry_sharpness"].get() == "12"
+    finally:
+        i18n.set_lang("en")
+        app.show_page("home")
+
+
+def test_arabic_mirrors_the_layout(app, tmp_path):
+    from photocull.gui import i18n
+
+    lay = make_coverage(tmp_path)
+    assert run_cull(lay, Config(), "portrait", detector=FakeDetector()).ok
+    app._set_folder(lay.main, ask_create=False)
+    assert pump(app, lambda: len(app.grid_view.items) == 2)
+    sidebar = app.nav_btns["home"].master
+    try:
+        app.update()
+        assert int(sidebar.grid_info()["column"]) == 0
+        cull_col = int(app.cards["cull"].grid_info()["column"])
+        assert cull_col == 0
+        app._toggle_language()
+        app.update()
+        assert int(app.nav_btns["home"].master.grid_info()["column"]) == 1      # sidebar on the right
+        assert int(app.cards["cull"].grid_info()["column"]) == 2                # steps start at the right
+        assert int(app.grid_view.grid_info()["column"]) == 1                    # photos right, details left
+        assert int(app.detail.grid_info()["column"]) == 0
+        assert pump(app, lambda: len(app.grid_view.items) == 2)
+        app.show_page("review")
+        app.update()
+        gv = app.grid_view
+        gv._paint()
+        first = gv.items[0]
+        cw, ch, _ = gv._metrics()
+        # a click on the right-most cell picks the first photo
+        class E: x = gv._width() - cw // 2; y = ch // 2
+        assert gv.items[gv._index_at(E)] is first
+    finally:
+        i18n.set_lang("en")
+        app._toggle_language() if app.btn_lang.cget("text") == "English" else None
