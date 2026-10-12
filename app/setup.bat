@@ -71,6 +71,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%APP%shortcuts.ps1" %SC_ARG
 if errorlevel 1 set "WARNINGS=%WARNINGS% [could not create the shortcut: use Start PhotoCull.bat in the folder]"
 if not errorlevel 1 attrib +h "%ROOT%Start PhotoCull.bat" >nul 2>nul
 
+if not exist "%ROOT%Styles" mkdir "%ROOT%Styles"
+
 rem ---- 6. hide the internals, then check everything
 echo [6/6] Tidying the folder and checking this PC...
 for /d /r "%APP%photocull" %%D in (__pycache__) do attrib +h "%%D" /d >nul 2>nul
