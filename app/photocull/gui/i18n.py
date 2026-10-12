@@ -186,6 +186,11 @@ AR: dict[str, str] = {
     "The Photoshop link is missing. Run First-Time Setup again.":
         "رابط فوتوشوب ناقص. شغّل First-Time Setup من جديد.",
     "Nothing to edit yet. Run step 1 first.": "ما فيه شي للتعديل. شغّل الخطوة 1 أول.",
+    "Nothing to split yet. Run step 1 (or step 2) first.":
+        "ما فيه شي للتقسيم. شغّل الخطوة 1 (أو 2) أول.",
+    "There are no edited photos yet (step 2).\n\nSplit the {n} picked photos as they are, without Photoshop editing?":
+        "ما فيه صور معدّلة للحين (الخطوة 2).\n\nأقسّم الصور المختارة ({n}) كما هي بدون تعديل فوتوشوب؟",
+    "Split the picked photos": "قسّم الصور المختارة",
     "Nothing to split yet. Run step 2 first.": "ما فيه شي للتقسيم. شغّل الخطوة 2 أول.",
     "Photoshop is not ready, so step 2 cannot run.": "فوتوشوب مو جاهز، فالخطوة 2 ما تشتغل.",
     "Wait for the current step to finish.": "انتظر لين تخلص الخطوة الحالية.",

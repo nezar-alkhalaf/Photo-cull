@@ -14,6 +14,7 @@ import shutil
 import threading
 import time
 import traceback
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -959,11 +960,15 @@ class App(ctk.CTk):
         def split_why():
             if running: return busy
             if not lay: return no_folder
-            if n["split_in"] == 0: return t("Nothing to split yet. Run step 2 first.")
+            # No edited photos yet? The picked photos can be split as they are (the window
+            # asks first), so only "nothing picked either" blocks the button.
+            if n["split_in"] == 0 and not (n["selected"] and not self._split_override()):
+                return t("Nothing to split yet. Run step 1 (or step 2) first.")
             return ""
 
         def all_why():
-            return cull_why() or (edit_why() if n["full"] else "") or ""
+            # Run All starts at step 1, so it only needs what step 1 needs.
+            return cull_why()
 
         for step, why in (("cull", cull_why()), ("edit", edit_why()), ("split", split_why())):
             self.cards[step].set_enabled(not why, why)
@@ -1205,6 +1210,9 @@ class App(ctk.CTk):
                            edit_input=folder("edit_input"), split_input=folder("split_input"))
         return cfg, params
 
+    def _split_override(self) -> bool:
+        return bool(str(self.settings["split_input"]).strip())
+
     def _start(self, kind: str) -> None:
         if self.worker and self.worker.running or not self.layout:
             return
@@ -1214,6 +1222,16 @@ class App(ctk.CTk):
             messagebox.showwarning("PhotoCull", str(exc), parent=self)
             return
         lay = self.layout
+        if (kind == "split" and not params.split_input and self._n["split_in"] == 0
+                and self._n["selected"] > 0):
+            ans = ask_choice(
+                self, t(STEP_TITLES["split"]),
+                t("There are no edited photos yet (step 2).\n\nSplit the {n} picked photos as "
+                  "they are, without Photoshop editing?").format(n=self._n["selected"]),
+                [(t("Split the picked photos"), "go")])
+            if ans != "go":
+                return
+            params = replace(params, split_input=str(lay.selected))
         steps = STEPS if kind == "all" else (kind,)
         for s in steps:
             self.transient[s] = ("Queued", "idle") if kind == "all" else ("Running…", "running")

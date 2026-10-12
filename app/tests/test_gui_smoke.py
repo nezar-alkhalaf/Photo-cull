@@ -202,3 +202,43 @@ def test_arabic_mirrors_the_layout(app, tmp_path):
     finally:
         i18n.set_lang("en")
         app._toggle_language() if app.btn_lang.cget("text") == "English" else None
+
+
+def test_run_all_only_needs_photos_in_full_coverage(app, tmp_path, monkeypatch):
+    lay = make_coverage(tmp_path)                 # nothing culled yet: Selected is empty
+    monkeypatch.setattr(app, "_style_value", lambda: "x.psd")
+    app._set_folder(lay.main, ask_create=False)
+    assert pump(app, lambda: app._n["full"] == 4)
+    app._update_buttons()
+    assert app._n["selected"] == 0
+    assert str(app.btn_all.cget("state")) == "normal", app.tip_all.text
+    assert str(app.cards["cull"].button.cget("state")) == "normal"
+    assert str(app.cards["edit"].button.cget("state")) == "disabled"      # needs step 1
+    assert str(app.cards["split"].button.cget("state")) == "disabled"     # nothing picked yet
+
+
+def test_split_works_straight_after_cull_by_asking_first(app, tmp_path, monkeypatch):
+    from photocull.gui import app as appmod
+
+    lay = make_coverage(tmp_path)
+    assert run_cull(lay, Config(), "portrait", detector=FakeDetector()).ok
+    app._set_folder(lay.main, ask_create=False)
+    assert pump(app, lambda: app._n["selected"] == 2)
+    assert app._n["split_in"] == 0                                         # nothing edited
+    app._update_buttons()
+    assert str(app.cards["split"].button.cget("state")) == "normal"
+
+    asked = []
+    monkeypatch.setattr(appmod, "ask_choice",
+                        lambda *a, **k: asked.append(a[2]) or None)       # user presses Cancel
+    app._start("split")
+    app.update()
+    assert asked and "2" in asked[0] and app.worker is None
+    assert not (lay.posts / "Post_1").exists()
+
+    monkeypatch.setattr(appmod, "ask_choice", lambda *a, **k: a[3][0][1])  # user agrees
+    app._start("split")
+    assert pump(app, lambda: app.worker is None)
+    assert sorted(p.name for p in (lay.posts / "Post_1").iterdir()) == \
+        sorted(p.name for p in lay.selected.iterdir())
+    assert not any(lay.edited.iterdir()) if lay.edited.exists() else True
