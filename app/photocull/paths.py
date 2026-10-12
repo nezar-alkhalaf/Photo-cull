@@ -24,18 +24,47 @@ class SafetyError(RuntimeError):
     """A requested operation would violate a hard safety rule."""
 
 
+SOURCE_FILE = "photos_folder.txt"     # inside a work folder: where the photos really are
+
+
 @dataclass(frozen=True)
 class CoverageLayout:
-    """Folder layout of one coverage (plan section 5)."""
+    """Folder layout of one coverage (plan section 5).
+
+    Normally the photos are in main/Full_Coverage. When the user picked any folder that
+    simply holds photos, `source` is that folder and `main` is a new work folder next to it
+    that holds the results (the photos folder itself is never written to).
+    """
 
     main: Path
+    source: Path | None = None
 
     @classmethod
-    def for_main(cls, main: Path | str) -> "CoverageLayout":
-        return cls(Path(main).resolve())
+    def for_main(cls, main: Path | str, source: Path | str | None = None) -> "CoverageLayout":
+        main = Path(main).resolve()
+        if source is None:
+            try:
+                text = (main / SOURCE_FILE).read_text(encoding="utf-8").strip()
+                source = text or None
+            except OSError:
+                source = None
+        return cls(main, Path(source).resolve() if source else None)
+
+    @classmethod
+    def for_photos_folder(cls, photos: Path | str) -> "CoverageLayout":
+        """Layout for a plain folder of photos: results go to '<name> - PhotoCull' beside it."""
+        photos = Path(photos).resolve()
+        return cls(photos.parent / f"{photos.name} - PhotoCull", photos)
+
+    def remember_source(self) -> None:
+        """Write the pointer file so the work folder can be opened again by itself."""
+        if self.source is not None:
+            self.main.mkdir(exist_ok=True)
+            (self.main / SOURCE_FILE).write_text(str(self.source), encoding="utf-8")
 
     @property
-    def full_coverage(self) -> Path: return self.main / "Full_Coverage"
+    def full_coverage(self) -> Path:
+        return self.source or self.main / "Full_Coverage"
     @property
     def selected(self) -> Path: return self.main / "Selected"
     @property
@@ -59,8 +88,8 @@ class CoverageLayout:
         """Create the output folders. Full_Coverage must already exist."""
         if not self.full_coverage.is_dir():
             raise SafetyError(
-                f"Full_Coverage folder not found in {self.main}. "
-                "Create it and put your photos there."
+                f"The photos folder was not found: {self.full_coverage}. "
+                "Choose it again."
             )
         for d in self.output_dirs:
             check_output_safe(self.full_coverage, d)

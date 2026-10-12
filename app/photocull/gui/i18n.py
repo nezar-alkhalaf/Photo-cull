@@ -326,6 +326,13 @@ AR: dict[str, str] = {
         "الملخص",
     "Type of shoot":
         "نوع التصوير",
+    "Pick any folder that has your photos. They are never changed: the results are saved in a new folder next to it.":
+        "اختر أي مجلد فيه صورك. صورك ما تتغيّر أبداً، والنتائج تنحفظ في مجلد جديد جنبه.",
+    "Photos: {src}\nResults go to: {main}": "الصور: {src}\nالنتائج في: {main}",
+    "This folder has no photos yet.\n\nCreate a Full_Coverage folder in it now? Then copy the photos of the coverage into it.":
+        "هذا المجلد ما فيه صور.\n\nأسوي فيه مجلد Full_Coverage الحين؟ بعدها انسخ فيه صور التغطية.",
+    "No photos found. Choose a folder that has photos in it.":
+        "ما لقيت صور. اختر مجلد فيه صور.",
     "Pick the folder of this coverage. It must hold a Full_Coverage folder with all the photos.":
         "اختر مجلد هذي التغطية. لازم يكون فيه مجلد Full_Coverage وفيه كل الصور.",
     "Review the picked photos →":

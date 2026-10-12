@@ -100,3 +100,28 @@ def test_preflight_reports_problems(tmp_path):
     lay = CoverageLayout.for_main(make_main(tmp_path))
     assert preflight(lay) == []
     assert any("disk space" in p for p in preflight(lay, needed_bytes=10**18))
+
+
+def test_any_photos_folder_gets_a_work_folder_beside_it(tmp_path):
+    from photocull.paths import SOURCE_FILE
+
+    photos = tmp_path / "مباراة الجمعة"
+    photos.mkdir()
+    lay = CoverageLayout.for_photos_folder(photos)
+    assert lay.source == photos.resolve()
+    assert lay.main == (tmp_path / "مباراة الجمعة - PhotoCull").resolve()
+    assert lay.full_coverage == photos.resolve()
+    lay.remember_source()
+    assert (lay.main / SOURCE_FILE).read_text(encoding="utf-8") == str(photos.resolve())
+    # opening the work folder later finds the photos again
+    again = CoverageLayout.for_main(lay.main)
+    assert again.source == photos.resolve() and again.full_coverage == photos.resolve()
+    lay.ensure()
+    assert (lay.main / "Selected").is_dir() and not (photos / "Selected").exists()
+    with pytest.raises(SafetyError):
+        check_not_in_source(photos / "x", lay)
+
+
+def test_normal_full_coverage_layout_is_unchanged(tmp_path):
+    lay = CoverageLayout.for_main(tmp_path)
+    assert lay.source is None and lay.full_coverage == tmp_path.resolve() / "Full_Coverage"

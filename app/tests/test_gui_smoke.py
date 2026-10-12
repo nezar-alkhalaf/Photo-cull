@@ -242,3 +242,24 @@ def test_split_works_straight_after_cull_by_asking_first(app, tmp_path, monkeypa
     assert sorted(p.name for p in (lay.posts / "Post_1").iterdir()) == \
         sorted(p.name for p in lay.selected.iterdir())
     assert not any(lay.edited.iterdir()) if lay.edited.exists() else True
+
+
+def test_any_folder_with_photos_can_be_chosen(app, tmp_path):
+    photos = tmp_path / "صور عشوائية"
+    photos.mkdir()
+    base, t0 = texture(1), datetime(2026, 10, 3, 18, 30)
+    for i, sigma in enumerate((0, 2)):
+        save_jpeg(photos / f"a{i}.jpg", with_eyes(blurred(base, sigma), "open"),
+                  t0 + timedelta(seconds=0.4 * i))
+    before = sorted(p.name for p in photos.iterdir())
+    app._set_folder(photos, ask_create=True)
+    assert app.layout.source == photos.resolve()
+    assert app.layout.main.name == "صور عشوائية - PhotoCull"
+    assert pump(app, lambda: app._n["full"] == 2)
+    assert "صور عشوائية" in app.lbl_folder.cget("text")
+    assert run_cull(app.layout, Config(), "portrait", detector=FakeDetector()).ok
+    assert sorted(p.name for p in photos.iterdir()) == before          # photos folder untouched
+    assert len(list((app.layout.main / "Selected").glob("*.jpg"))) == 1
+    # choosing the same photos folder again reuses the work folder and its results
+    app._set_folder(photos, ask_create=True)
+    assert pump(app, lambda: app._n["selected"] == 1)

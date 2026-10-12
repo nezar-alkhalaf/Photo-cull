@@ -278,8 +278,8 @@ class App(ctk.CTk):
         self.lbl_folder = ctk.CTkLabel(body, text=t("No folder chosen"), anchor=anchor(),
                                        font=(FONT, 13), wraplength=620, justify=justify())
         self.lbl_folder.grid(row=0, column=mcol(1, 2), sticky="ew")
-        ctk.CTkLabel(body, text=t("Pick the folder of this coverage. It must hold a Full_Coverage "
-                                  "folder with all the photos."),
+        ctk.CTkLabel(body, text=t("Pick any folder that has your photos. They are never changed: the results are "
+                                  "saved in a new folder next to it."),
                      font=(FONT, 11), anchor=anchor(), justify=justify(), wraplength=760,
                      text_color=("gray35", "gray65")).grid(row=1, column=0, columnspan=2,
                                                            sticky="ew", pady=(6, 0))
@@ -709,7 +709,7 @@ class App(ctk.CTk):
             child.destroy()
         self._build()
         self._refresh_styles()
-        self.lbl_folder.configure(text=str(self.layout.main) if self.layout
+        self.lbl_folder.configure(text=self._folder_text(self.layout) if self.layout
                                   else t("No folder chosen"))
         self._set_ps(*self.ps_state)
         if log_text.strip():
@@ -768,10 +768,22 @@ class App(ctk.CTk):
         if self.worker and self.worker.running:
             return
         layout = CoverageLayout.for_main(main)
-        if ask_create and not layout.full_coverage.is_dir():
-            if messagebox.askyesno(
-                    "PhotoCull", t("This folder has no Full_Coverage folder yet.\n\n"
-                                   "Create it now? Then copy all the photos of the coverage "
+        if ask_create and layout.source is None and not layout.full_coverage.is_dir():
+            if list_jpegs(layout.main):
+                # Any folder with photos works: results go to a new folder beside it.
+                layout = CoverageLayout.for_photos_folder(layout.main)
+                existing = CoverageLayout.for_main(layout.main)
+                if existing.source is not None:
+                    layout = existing
+                try:
+                    layout.remember_source()
+                except OSError as exc:
+                    messagebox.showerror("PhotoCull", t("Could not create the folder:\n{exc}").format(
+                        exc=exc), parent=self)
+                    return
+            elif messagebox.askyesno(
+                    "PhotoCull", t("This folder has no photos yet.\n\nCreate a Full_Coverage "
+                                   "folder in it now? Then copy the photos of the coverage "
                                    "into it."),
                     parent=self):
                 try:
@@ -786,9 +798,16 @@ class App(ctk.CTk):
             set_coverage_log(layout.log)
         except OSError:
             pass
-        self.lbl_folder.configure(text=str(layout.main))
+        self.lbl_folder.configure(text=self._folder_text(layout))
         self._clear_log()
         self._refresh_all()
+
+    @staticmethod
+    def _folder_text(layout: CoverageLayout) -> str:
+        if layout.source is None:
+            return str(layout.main)
+        return t("Photos: {src}\nResults go to: {main}").format(src=layout.source,
+                                                                  main=layout.main)
 
     def _open_doctor(self) -> None:
         from .doctor_dialog import DoctorDialog
@@ -941,7 +960,7 @@ class App(ctk.CTk):
             if running: return busy
             if not lay: return no_folder
             if n["full"] == 0:
-                return (t("No photos found. Copy the photos into the Full_Coverage folder first.")
+                return (t("No photos found. Choose a folder that has photos in it.")
                         if not str(self.settings["cull_input"]).strip()
                         else t("No photos in the folder chosen under Settings → Folders → Cull reads from."))
             return ""

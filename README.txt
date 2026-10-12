@@ -5,7 +5,7 @@
 ------------
 1) أول مرة على أي جهاز: انقر مرتين على "First-Time Setup" وانتظر لين يكتب Done (يحتاج انترنت، وياخذ كم دقيقة).
 2) بعدها شغّل البرنامج من أيقونة الكاميرا PhotoCull اللي في هذا المجلد (أو من سطح المكتب). تقدر تنسخ الأيقونة (Copy) وتلصقها (Paste) في سطح المكتب أو أي مكان.
-3) اضغط "Choose folder" واختر مجلد التغطية. حط كل الصور داخل مجلد اسمه Full_Coverage.
+3) اضغط "Choose folder" واختر أي مجلد فيه صورك (ما يحتاج اسم معين). صورك ما تتغيّر، والنتائج تنحفظ في مجلد جديد جنبه اسمه "اسم المجلد - PhotoCull".
 4) اختر الستايل من القائمة (ملفات الـ PSD اللي في مجلد Styles) ثم اضغط "Run All".
 5) زر «العربية / English» فوق في النافذة يغيّر لغة الواجهة، والبرنامج يتذكر اختيارك.
 6) لو صار شي غريب: افتح صفحة الإعدادات (Settings) واضغط "Check this PC" في قسم Tools، يعطيك قائمة بالمشاكل وحلها.
@@ -20,8 +20,9 @@ Quick start (English)
 2. From then on, double-click the PhotoCull camera icon in this folder (or on the Desktop).
    You can Copy it and Paste it anywhere (Desktop, Taskbar...). It points to this folder, so
    if you move the folder, run First-Time Setup again to refresh it.
-3. Click "Choose folder" and pick the folder of the coverage. Put ALL the photos
-   inside a folder called Full_Coverage in it. PhotoCull never changes that folder.
+3. Click "Choose folder" and pick ANY folder that has your photos (no special name needed).
+   PhotoCull never changes your photos: the results go to a new folder beside it called
+   "<folder name> - PhotoCull". (A folder that has a Full_Coverage folder inside still works.)
 4. Pick your style in the list (the .psd files in the Styles folder), then press "Run All".
    Or run the three steps one by one: 1 Cull, 2 Edit in Photoshop, 3 Split into posts.
 5. The button at the top right (English / العربية) switches the window language. It is remembered.
