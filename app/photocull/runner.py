@@ -51,17 +51,43 @@ def noop_log(msg: str) -> None:
     pass
 
 
-def _lower_thread_priority() -> None:
-    """Run batch work just below the window's thread so the window stays smooth on a
-    slow PC (Windows only; ignored elsewhere)."""
+THREAD_MODE_BACKGROUND_BEGIN = 0x10000    # low CPU and disk priority for the calling thread
+THREAD_MODE_BACKGROUND_END = 0x20000
+
+
+def _set_background(on: bool) -> None:
+    """Switch the CALLING thread in or out of Windows background mode (ignored elsewhere)."""
     try:
         import ctypes
         k32 = ctypes.windll.kernel32
         k32.GetCurrentThread.restype = ctypes.c_void_p
         k32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        k32.SetThreadPriority(k32.GetCurrentThread(), 0x10000)    # THREAD_MODE_BACKGROUND_BEGIN: low CPU and disk priority
+        k32.SetThreadPriority(k32.GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN if on
+                              else THREAD_MODE_BACKGROUND_END)
     except Exception:
         pass
+
+
+def disable_power_throttling() -> bool:
+    """Ask Windows 11 not to put this process in "efficiency mode" while its window is in the
+    background (that mode makes batch work crawl on a slow PC). Ignored elsewhere."""
+    try:
+        import ctypes
+
+        class State(ctypes.Structure):
+            _fields_ = [("Version", ctypes.c_ulong), ("ControlMask", ctypes.c_ulong),
+                        ("StateMask", ctypes.c_ulong)]
+
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.SetProcessInformation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+                                              ctypes.c_ulong]
+        # version 1, control the "execution speed" bit (1), leave it off (0) = never throttle
+        state = State(1, 1, 0)
+        return bool(k32.SetProcessInformation(k32.GetCurrentProcess(), 4, ctypes.byref(state),
+                                              ctypes.sizeof(state)))   # 4 = ProcessPowerThrottling
+    except Exception:
+        return False
 
 
 class Worker:
@@ -78,13 +104,26 @@ class Worker:
         self.events: queue.Queue = queue.Queue()
         self.thread: threading.Thread | None = None
         self.finished = threading.Event()
+        # The window sets this. While the user is looking at the window the work runs at low
+        # priority so the window stays smooth; once they switch to another program it runs
+        # at normal priority so it keeps going at full speed in the background.
+        self.window_active = True
+        self._bg: bool | None = None
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, name="photocull-worker", daemon=True)
         self.thread.start()
 
+    def _fit_priority(self) -> None:
+        """Called from the worker thread only (background mode is per calling thread)."""
+        want = bool(self.window_active)
+        if want != self._bg:
+            self._bg = want
+            _set_background(want)
+
     def _run(self) -> None:
-        _lower_thread_priority()
+        disable_power_throttling()
+        self._fit_priority()
         try:
             res = self._fn(self._progress, self._log, self.cancel)
         except BaseException as exc:                       # never let the thread die silently
@@ -95,6 +134,7 @@ class Worker:
         self.events.put(("done", res))
 
     def _progress(self, done: int, total: int, name: str) -> None:
+        self._fit_priority()
         self.events.put(("progress", done, total, name))
 
     def _log(self, msg: str) -> None:

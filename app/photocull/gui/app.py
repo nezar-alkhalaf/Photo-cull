@@ -1332,6 +1332,7 @@ class App(ctk.CTk):
         w = self.worker
         if w is None:
             return
+        w.window_active = self._window_in_front()
         done_res = None
         logs: list[str] = []
         for ev in w.poll():
@@ -1513,6 +1514,13 @@ class App(ctk.CTk):
         self._update_buttons()
 
     # ================================================================== misc
+    def _window_in_front(self) -> bool:
+        """True while the user is looking at this window (not minimised, not in another app)."""
+        try:
+            return self.state() != "iconic" and self.focus_displayof() is not None
+        except Exception:
+            return True
+
     def _on_focus(self, e=None) -> None:
         if e is not None and e.widget is not self:
             return
@@ -1580,6 +1588,8 @@ def _num(v, digits: int = 0) -> str:
 
 
 def main(cfg: Config | None = None) -> int:
+    from ..runner import disable_power_throttling
+    disable_power_throttling()
     setup_logging()
     app = App(cfg or load_config())
     app.mainloop()
