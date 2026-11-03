@@ -19,6 +19,9 @@ echo  ==============================================
 echo.
 
 rem ---- 1. find Python 3.11 or newer (3.12 preferred: it is what PhotoCull was tested on)
+rem      If there is none, download and install it for this user (no admin rights needed).
+set "TRIED_INSTALL="
+:findpython
 set "PY="
 for %%V in (3.12 3.11 3.13) do if not defined PY (
     py -%%V -c "import sys" >nul 2>nul && set "PY=py -%%V"
@@ -26,7 +29,18 @@ for %%V in (3.12 3.11 3.13) do if not defined PY (
 if not defined PY (
     python -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)" >nul 2>nul && set "PY=python"
 )
-if not defined PY goto :nopython
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set PY="%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if defined PY goto :pyfound
+if defined TRIED_INSTALL goto :nopython
+set "TRIED_INSTALL=1"
+echo [1/6] Python is not installed on this PC. Installing it now (about 1 minute)...
+set "PYSETUP=%TEMP%\python-3.12.10-amd64.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe' -OutFile $env:PYSETUP" >nul 2>nul
+if not exist "%PYSETUP%" goto :nopython
+"%PYSETUP%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1
+del "%PYSETUP%" >nul 2>nul
+goto :findpython
+:pyfound
 echo [1/6] Python found: %PY%
 
 rem ---- 2. private environment inside app\.venv (rebuilt if it was copied from another PC)
@@ -99,7 +113,7 @@ exit /b 0
 
 :nopython
 echo.
-echo  PROBLEM: Python 3.11 or newer was not found on this PC.
+echo  PROBLEM: Python 3.11 or newer was not found, and it could not be installed automatically.
 echo  FIX: install Python 3.12 from https://www.python.org/downloads/
 echo       and tick "Add Python to PATH" in the first screen. Then run this setup again.
 call :wait
