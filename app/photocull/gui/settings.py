@@ -37,6 +37,9 @@ DEFAULTS: dict = {
     "split_input": "",
     "advanced_open": False,
     "text_scale": 1.3,          # A- / A+ buttons in the sidebar; 1.0 = the old, smaller size
+    "auto_update_check": True,   # look for a newer version once a day (Updates page)
+    "last_update_check": 0.0,
+    "skipped_version": "",
     "language": "en",           # "en" or "ar": the button at the top of the window
 }
 

@@ -20,7 +20,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .. import __version__
+from .. import __version__, updater
 from ..config import Config, load_config
 from ..edit import parse_action
 from ..logsetup import set_coverage_log, setup_logging
@@ -69,9 +69,10 @@ PS_TEXT = {
 }
 LOG_KEEP_LINES = 1500
 NAV = {"home": ("⌂", "Home"), "review": ("▦", "Review photos"),
-       "settings": ("⚙", "Settings"), "activity": ("≡", "Activity")}
+       "settings": ("⚙", "Settings"), "activity": ("≡", "Activity"),
+       "updates": ("↻", "Updates")}
 TEXT_STEPS = (1.0, 1.15, 1.3, 1.5, 1.7)       # sizes the A- / A+ buttons step through
-MACHINE_KEYS = {"advanced_open", "main_folder", "cull_input", "edit_input", "split_input"}
+MACHINE_KEYS = {"advanced_open", "last_update_check", "skipped_version", "main_folder", "cull_input", "edit_input", "split_input"}
 PREVIEW_H = 150
 
 
@@ -127,6 +128,12 @@ class App(ctk.CTk):
         self._refresh_wanted = False
         self._snap_q: queue.Queue = queue.Queue()
         self._n = dict(full=0, selected=0, alts=0, edit_in=0, split_in=0, edited=0)
+        self._update_rel = None                  # newest release, when newer than this program
+        self._update_dismissed = False           # the user closed the banner (this session)
+        self._upd_state = "idle"                 # idle / checking / downloading
+        self._upd_error = ""
+        self._upd_checked = False
+        self._upd_q: queue.Queue = queue.Queue()
         self._inputs_seen = None
         self._refresh_job = None
         self._suppress = False
@@ -140,6 +147,7 @@ class App(ctk.CTk):
         threading.Thread(target=self._probe_loop, daemon=True, name="ps-probe").start()
         self.bind("<FocusIn>", self._on_focus, add="+")
         self.after(80, self._poll)
+        self.after(5000, self._maybe_auto_check)
         self.after(600, lambda: threading.Thread(target=_warm_up, daemon=True,
                                                  name="warm-up").start())
 
@@ -159,17 +167,21 @@ class App(ctk.CTk):
         content = ctk.CTkFrame(self, fg_color="transparent")
         content.grid(row=0, column=mcol(1, 2), sticky="nsew", padx=px(12, 14), pady=(12, 0))
         content.columnconfigure(0, weight=1)
-        content.rowconfigure(0, weight=1)
+        content.rowconfigure(0, weight=0)
+        content.rowconfigure(1, weight=1)
+        self.banner = self._build_banner(content)         # row 0, hidden until an update exists
         self.pages: dict[str, ctk.CTkBaseClass] = {}
         for key, builder in (("home", self._build_home), ("review", self._build_review),
                              ("settings", self._build_settings_page),
-                             ("activity", self._build_activity)):
+                             ("activity", self._build_activity),
+                             ("updates", self._build_updates)):
             page = builder(content)
-            page.grid(row=0, column=0, sticky="nsew")
+            page.grid(row=1, column=0, sticky="nsew")
             self.pages[key] = page
         self._build_footer().grid(row=1, column=mcol(1, 2), sticky="ew", padx=px(12, 14),
                                   pady=(6, 10))
         self.show_page(self.page_key)
+        self._refresh_update_ui()
 
     # ---- small building blocks
     def _page_header(self, parent, title: str, subtitle: str = "") -> ctk.CTkFrame:
@@ -207,13 +219,15 @@ class App(ctk.CTk):
         text = f"{i18n.RLM}{icon}   {t(label)}" if i18n.is_ar() else f"  {icon}   {t(label)}"
         if key == "review" and self.review and (self.review.selected or self.review.alternates):
             text += f"  ({len(self.review.selected)})"
+        if key == "updates" and getattr(self, "_update_rel", None):
+            text += "  ●"
         return text
 
     def _build_sidebar(self):
         f = ctk.CTkFrame(self, width=210, corner_radius=0, fg_color=("gray88", "gray14"))
         f.grid_propagate(False)
         f.columnconfigure(0, weight=1)
-        f.rowconfigure(6, weight=1)
+        f.rowconfigure(2 + len(NAV), weight=1)
         ctk.CTkLabel(f, text="PhotoCull", font=(FONT, 22, "bold"), anchor=anchor()).grid(
             row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
         ctk.CTkLabel(f, text=f"v{__version__}", font=(FONT, 11), anchor=anchor(),
@@ -228,7 +242,7 @@ class App(ctk.CTk):
             self.nav_btns[key] = b
         # bottom block: Photoshop status, theme, language
         bottom = ctk.CTkFrame(f, fg_color="transparent")
-        bottom.grid(row=7, column=0, sticky="ew", padx=14, pady=(0, 14))
+        bottom.grid(row=3 + len(NAV), column=0, sticky="ew", padx=14, pady=(0, 14))
         bottom.columnconfigure(mcol(1, 2), weight=1)
         self.ps_dot = ctk.CTkLabel(bottom, text="●", font=(FONT, 16), width=18)
         self.ps_dot.grid(row=0, column=mcol(0, 2), sticky="n", pady=(2, 0))
@@ -574,6 +588,238 @@ class App(ctk.CTk):
         self.log._textbox.tag_config("err", foreground="#ff7b72")
         return page
 
+    # ---- updates: banner, page, background check and download
+    def _build_banner(self, parent):
+        """Slim bar above the pages: only visible when a newer version exists."""
+        f = ctk.CTkFrame(parent, corner_radius=10, fg_color=("#3B8ED0", "#1F6AA5"))
+        self.lbl_banner = ctk.CTkLabel(f, text="", font=(FONT, 13, "bold"), text_color="white",
+                                       anchor=anchor())
+        self.lbl_banner.pack(side=side("left"), padx=14, pady=8)
+        ctk.CTkButton(f, text="✕", width=30, height=28, fg_color="transparent", hover=False,
+                      text_color="white", font=(FONT, 14, "bold"),
+                      command=self._dismiss_update).pack(side=side("right"), padx=(0, 8))
+        self.btn_banner_update = ctk.CTkButton(f, text=t("Update now"), width=110, height=28,
+                                               fg_color="white", hover_color=("gray90", "gray90"),
+                                               text_color=("#1F6AA5", "#1F6AA5"),
+                                               command=self._start_update)
+        self.btn_banner_update.pack(side=side("right"), padx=4)
+        ctk.CTkButton(f, text=t("Details"), width=70, height=28, fg_color="transparent",
+                      hover=False, text_color="white", font=(FONT, 12, "underline"),
+                      command=lambda: self.show_page("updates")).pack(side=side("right"), padx=4)
+        return f
+
+    def _build_updates(self, parent):
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(2, weight=1)
+        self._page_header(page, t("Updates"),
+                          t("PhotoCull can update itself. Updating keeps your settings and "
+                            "styles.")).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        card, body = self._section(page, t("Version"))
+        card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        body.columnconfigure(mcol(0, 2), weight=1)
+        ctk.CTkLabel(body, text=t("Installed: {v}").format(v=__version__), font=(FONT, 13),
+                     anchor=anchor()).grid(row=0, column=mcol(0, 2), sticky="ew")
+        self.lbl_upd_status = ctk.CTkLabel(body, text="", font=(FONT, 14, "bold"),
+                                           anchor=anchor(), justify=justify(), wraplength=640)
+        self.lbl_upd_status.grid(row=1, column=mcol(0, 2), sticky="ew", pady=(6, 4))
+        self.upd_progress = ctk.CTkProgressBar(body)
+        self.upd_progress.set(0)
+        self.upd_progress.grid(row=2, column=mcol(0, 2), sticky="ew", pady=(2, 6))
+        bar = ctk.CTkFrame(body, fg_color="transparent")
+        bar.grid(row=3, column=mcol(0, 2), sticky=sticky("w"))
+        self.btn_check = ctk.CTkButton(bar, text=t("Check now"), width=130,
+                                       command=lambda: self._check_updates(manual=True))
+        self.btn_check.grid(row=0, column=mcol(0, 3), padx=px(0, 8))
+        self.btn_update = ctk.CTkButton(bar, text=t("Update now"), width=130,
+                                        fg_color=("#2e8b57", "#2e8b57"),
+                                        hover_color=("#256f46", "#3aa66a"),
+                                        command=self._start_update)
+        self.btn_update.grid(row=0, column=mcol(1, 3), padx=px(0, 8))
+        self.btn_skip = self._grey_button(bar, t("Skip this version"), self._skip_update, 150)
+        self.btn_skip.grid(row=0, column=mcol(2, 3))
+        self.var_autoupd = ctk.BooleanVar(value=bool(self.settings["auto_update_check"]))
+        ctk.CTkCheckBox(body, text=t("Check for updates automatically once a day"),
+                        variable=self.var_autoupd, command=self._on_autoupd).grid(
+            row=4, column=mcol(0, 2), sticky=sticky("w"), pady=(10, 0))
+        if not updater.can_self_update():
+            ctk.CTkLabel(body, text=t("This copy was installed with Git. Update it with "
+                                      "“Update PhotoCull.bat” in the program folder."),
+                         font=(FONT, 12), text_color=("#8a5a00", "#ffd27a"), anchor=anchor(),
+                         justify=justify(), wraplength=640).grid(
+                row=5, column=mcol(0, 2), sticky="ew", pady=(8, 0))
+        card, body = self._section(page, t("What's new"))
+        card.grid(row=2, column=0, sticky="nsew")
+        card.rowconfigure(1, weight=1)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        card.grid_rowconfigure(1, weight=1)
+        self.upd_notes = ctk.CTkTextbox(body, font=(FONT, 12), wrap="word", state="disabled",
+                                        height=160)
+        self.upd_notes.grid(row=0, column=0, sticky="nsew")
+        return page
+
+    def _on_autoupd(self) -> None:
+        self.settings["auto_update_check"] = bool(self.var_autoupd.get())
+        self.settings.save()
+
+    def _set_notes(self, text: str) -> None:
+        self.upd_notes.configure(state="normal")
+        self.upd_notes.delete("1.0", "end")
+        self.upd_notes.insert("1.0", text)
+        self.upd_notes.configure(state="disabled")
+
+    def _refresh_update_ui(self) -> None:
+        """Redraw banner, sidebar dot and the Updates page from the current state."""
+        rel = self._update_rel
+        busy = self._upd_state != "idle"
+        show_banner = bool(rel and not self._update_dismissed)
+        if show_banner:
+            self.lbl_banner.configure(text=t("A new version ({v}) is available.").format(v=rel.version))
+            self.banner.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        else:
+            self.banner.grid_remove()
+        self.nav_btns["updates"].configure(text=self._nav_text("updates"))
+        can = updater.can_self_update()
+        self.btn_banner_update.configure(state="normal" if can and not busy else "disabled")
+        self.btn_check.configure(state="disabled" if busy else "normal")
+        self.btn_update.configure(state="normal" if rel and can and not busy else "disabled")
+        self.btn_skip.configure(state="normal" if rel and not busy else "disabled")
+        if rel:
+            self._set_notes(rel.notes or t("No details were written for this version."))
+        if self._upd_state == "downloading":
+            pass                                       # the status line shows the percentage
+        elif self._upd_state == "checking":
+            self.lbl_upd_status.configure(text=t("Checking for updates…"))
+        elif self._upd_error:
+            self.lbl_upd_status.configure(
+                text=t("Could not check for updates: {msg}").format(msg=t(self._upd_error)))
+        elif rel:
+            self.lbl_upd_status.configure(text=t("New version {v} is available (you have {cur}).")
+                                          .format(v=rel.version, cur=__version__))
+        elif self._upd_checked:
+            self.lbl_upd_status.configure(text=t("You have the newest version."))
+        else:
+            self.lbl_upd_status.configure(text=t("Not checked yet."))
+        if self._upd_state != "downloading":
+            self.upd_progress.grid_remove()
+
+    def _set_update(self, rel) -> None:
+        self._update_rel = rel
+        self._update_dismissed = False
+        self._refresh_update_ui()
+
+    def _dismiss_update(self) -> None:
+        self._update_dismissed = True
+        self._refresh_update_ui()
+
+    def _skip_update(self) -> None:
+        if self._update_rel:
+            self.settings["skipped_version"] = self._update_rel.version
+            self.settings.save()
+        self._update_rel = None
+        self._refresh_update_ui()
+        self.lbl_upd_status.configure(text=t("This version will not be offered again."))
+
+    def _maybe_auto_check(self) -> None:
+        if (self.settings["auto_update_check"] and
+                time.time() - float(self.settings["last_update_check"] or 0) > 20 * 3600):
+            self._check_updates(manual=False)
+
+    def _check_updates(self, manual: bool) -> None:
+        if self._upd_state != "idle":
+            return
+        self._upd_state, self._upd_error = "checking", ""
+        self._refresh_update_ui()
+
+        def work():
+            try:
+                self._upd_q.put(("checked", updater.check(), "", manual))
+            except updater.UpdateError as exc:
+                self._upd_q.put(("checked", None, str(exc), manual))
+            except Exception as exc:
+                self._upd_q.put(("checked", None, f"{type(exc).__name__}: {exc}", manual))
+
+        threading.Thread(target=work, daemon=True, name="update-check").start()
+
+    def _start_update(self) -> None:
+        rel = self._update_rel
+        if not rel or self._upd_state != "idle" or not updater.can_self_update():
+            return
+        if self.worker and self.worker.running:
+            messagebox.showinfo("PhotoCull", t("Wait for the current step to finish."), parent=self)
+            return
+        self._upd_state = "downloading"
+        self.upd_progress.set(0)
+        self.upd_progress.grid()
+        self.lbl_upd_status.configure(text=t("Downloading… {pct}%").format(pct=0))
+        self._refresh_update_ui()
+        self.show_page("updates")
+
+        def work():
+            try:
+                path = updater.download(
+                    rel, lambda got, total: self._upd_q.put(("dl", got, total)))
+                self._upd_q.put(("dl_done", path))
+            except updater.UpdateError as exc:
+                self._upd_q.put(("dl_err", str(exc)))
+            except Exception as exc:
+                self._upd_q.put(("dl_err", f"{type(exc).__name__}: {exc}"))
+
+        threading.Thread(target=work, daemon=True, name="update-download").start()
+
+    def _drain_updates(self) -> None:
+        while True:
+            try:
+                ev = self._upd_q.get_nowait()
+            except queue.Empty:
+                return
+            kind = ev[0]
+            if kind == "checked":
+                _, rel, err, manual = ev
+                self._upd_state, self._upd_error = "idle", err
+                self._upd_checked = not err
+                if not err:
+                    self.settings["last_update_check"] = time.time()
+                    self.settings.save()
+                skipped = self.settings["skipped_version"]
+                if rel and (manual or rel.version != skipped):
+                    self._set_update(rel)
+                else:
+                    self._update_rel = None
+                    self._refresh_update_ui()
+            elif kind == "dl":
+                _, got, total = ev
+                frac = got / total if total else 0
+                self.upd_progress.set(frac)
+                self.lbl_upd_status.configure(
+                    text=t("Downloading… {pct}%").format(pct=int(frac * 100)))
+            elif kind == "dl_err":
+                self._upd_state, self._upd_error = "idle", ev[1]
+                self._refresh_update_ui()
+            elif kind == "dl_done":
+                self._upd_state = "idle"
+                self._refresh_update_ui()
+                self._finish_update(ev[1])
+
+    def _finish_update(self, path) -> None:
+        rel = self._update_rel
+        ans = ask_choice(
+            self, t("Update PhotoCull"),
+            t("Version {v} is ready. PhotoCull will close, update (a few minutes, it needs "
+              "internet) and open again. Your settings and styles are kept.").format(
+                v=rel.version if rel else ""),
+            [(t("Update now"), "go")], cancel_label=t("Later"))
+        if ans != "go":
+            return
+        try:
+            updater.launch_installer(path)
+        except OSError as exc:
+            messagebox.showerror("PhotoCull", t("Could not start the update:\n{exc}").format(exc=exc),
+                                 parent=self)
+            return
+        self._destroy()
+
     # ---- always-visible bottom bar
     def _build_footer(self):
         f = ctk.CTkFrame(self, corner_radius=12)
@@ -715,6 +961,7 @@ class App(ctk.CTk):
         if log_text.strip():
             self._append_log(log_text)
         self._refresh_all()
+        self._refresh_update_ui()
 
     def _toggle_theme(self) -> None:
         dark = bool(self.theme_switch.get())
@@ -1313,6 +1560,7 @@ class App(ctk.CTk):
         self.after(80, self._poll)
 
     def _drain(self) -> None:
+        self._drain_updates()
         while True:                                   # Photoshop status from the probe thread
             try:
                 st, detail = self._ps_q.get_nowait()

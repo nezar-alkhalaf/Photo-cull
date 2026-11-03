@@ -376,6 +376,62 @@ AR: dict[str, str] = {
         "التفاصيل ›",
     "Smaller text": "تصغير الخط",
     "Bigger text": "تكبير الخط",
+    "Updates":
+        "التحديثات",
+    "Version":
+        "النسخة",
+    "Installed: {v}":
+        "المثبّتة: {v}",
+    "What's new":
+        "الجديد",
+    "Check now":
+        "افحص الآن",
+    "Update now":
+        "حدّث الآن",
+    "Skip this version":
+        "تجاهل هذي النسخة",
+    "Later":
+        "بعدين",
+    "Details":
+        "التفاصيل",
+    "PhotoCull can update itself. Updating keeps your settings and styles.":
+        "البرنامج يقدر يحدّث نفسه. التحديث يحتفظ بإعداداتك وستايلاتك.",
+    "Check for updates automatically once a day":
+        "افحص التحديثات تلقائياً مرة باليوم",
+    "A new version ({v}) is available.":
+        "فيه نسخة جديدة ({v}) متوفرة.",
+    "New version {v} is available (you have {cur}).":
+        "فيه نسخة جديدة {v} (عندك {cur}).",
+    "You have the newest version.":
+        "عندك آخر نسخة.",
+    "Not checked yet.":
+        "ما انفحصت للحين.",
+    "Checking for updates…":
+        "جاري فحص التحديثات…",
+    "Could not check for updates: {msg}":
+        "ما قدرت أفحص التحديثات: {msg}",
+    "No details were written for this version.":
+        "ما انكتبت تفاصيل لهذي النسخة.",
+    "Downloading… {pct}%":
+        "جاري التنزيل… {pct}%",
+    "This version will not be offered again.":
+        "هذي النسخة ما راح تنعرض مرة ثانية.",
+    "Update PhotoCull":
+        "تحديث PhotoCull",
+    "Version {v} is ready. PhotoCull will close, update (a few minutes, it needs internet) and open again. Your settings and styles are kept.":
+        "النسخة {v} جاهزة. البرنامج بيسكّر ويتحدّث (كم دقيقة، يحتاج انترنت) وبعدها يفتح من جديد. إعداداتك وستايلاتك تبقى.",
+    "Could not start the update:\n{exc}":
+        "ما قدرت أبدأ التحديث:\n{exc}",
+    "This copy was installed with Git. Update it with “Update PhotoCull.bat” in the program folder.":
+        "هذي النسخة منزّلة بـ Git. حدّثها بملف «Update PhotoCull.bat» اللي في مجلد البرنامج.",
+    "Could not reach GitHub. Check the internet connection.":
+        "ما قدرت أوصل لـ GitHub. تأكد من الانترنت.",
+    "The download failed. Check the internet connection and try again.":
+        "فشل التنزيل. تأكد من الانترنت وحاول من جديد.",
+    "The downloaded file is damaged. Please try again.":
+        "الملف المنزّل تالف. حاول من جديد.",
+    "The download was stopped.":
+        "توقف التنزيل.",
 }
 
 # Sentence shapes produced by the core steps (cull / edit / split / pipeline), rewritten in

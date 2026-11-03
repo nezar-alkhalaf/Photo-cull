@@ -146,7 +146,7 @@ def test_language_button_redraws_the_window_in_arabic_and_back(app, tmp_path):
 def test_sidebar_pages_switch_and_survive_a_language_change(app, tmp_path):
     from photocull.gui import i18n
 
-    assert set(app.pages) == {"home", "review", "settings", "activity"}
+    assert set(app.pages) == {"home", "review", "settings", "activity", "updates"}
     assert app.page_key == "home"
     for key in ("review", "settings", "activity", "home"):
         app.show_page(key)
@@ -201,7 +201,8 @@ def test_arabic_mirrors_the_layout(app, tmp_path):
         assert gv.items[gv._index_at(E)] is first
     finally:
         i18n.set_lang("en")
-        app._toggle_language() if app.btn_lang.cget("text") == "English" else None
+        app.settings["language"] = "en"
+        app._rebuild_ui()
 
 
 def test_run_all_only_needs_photos_in_full_coverage(app, tmp_path, monkeypatch):
@@ -263,3 +264,67 @@ def test_any_folder_with_photos_can_be_chosen(app, tmp_path):
     # choosing the same photos folder again reuses the work folder and its results
     app._set_folder(photos, ask_create=True)
     assert pump(app, lambda: app._n["selected"] == 1)
+
+
+def _release(version="9.9.9"):
+    from photocull.updater import Release
+    return Release(version, "- faster\n- fixes", "https://github.com/o/r/x.exe",
+                   f"PhotoCull-Setup-{version}.exe", 10, None, "")
+
+
+def test_update_banner_dot_and_dismiss(app):
+    app.update()
+    assert not app.banner.winfo_ismapped()
+    assert "●" not in app.nav_btns["updates"].cget("text")
+    app._set_update(_release())
+    app.update()
+    assert app.banner.winfo_ismapped() and "9.9.9" in app.lbl_banner.cget("text")
+    assert "●" in app.nav_btns["updates"].cget("text")
+    assert "9.9.9" in app.lbl_upd_status.cget("text")
+    app._dismiss_update()
+    app.update()
+    assert not app.banner.winfo_ismapped()
+    assert "●" in app.nav_btns["updates"].cget("text")         # the page still shows it
+    app._skip_update()
+    app.update()
+    assert app.settings["skipped_version"] == "9.9.9"
+    assert "●" not in app.nav_btns["updates"].cget("text")
+
+
+def test_update_downloads_confirms_then_hands_over_to_the_installer(app, tmp_path, monkeypatch):
+    from photocull import updater
+    from photocull.gui import app as appmod
+
+    monkeypatch.setattr(updater, "can_self_update", lambda: True)
+    fake = tmp_path / "PhotoCull-Setup-9.9.9.exe"
+    fake.write_bytes(b"x")
+    launched, destroyed = [], []
+    monkeypatch.setattr(updater, "download", lambda rel, cb, **k: (cb(5, 10), fake)[1])
+    monkeypatch.setattr(updater, "launch_installer", lambda p: launched.append(p))
+    monkeypatch.setattr(app, "_destroy", lambda: destroyed.append(1))
+    monkeypatch.setattr(appmod, "ask_choice", lambda *a, **k: "go")
+    app._set_update(_release())
+    app._start_update()
+    assert pump(app, lambda: bool(destroyed))
+    assert launched == [fake] and app._upd_state == "idle"
+
+    launched.clear(); destroyed.clear()
+    monkeypatch.setattr(appmod, "ask_choice", lambda *a, **k: None)      # "Later"
+    app._start_update()
+    assert pump(app, lambda: app._upd_state == "idle" and not app.btn_check.cget("state") == "disabled")
+    app.update()
+    assert not launched and not destroyed
+
+
+def test_manual_check_with_no_newer_version_and_offline(app, monkeypatch):
+    from photocull import updater
+
+    monkeypatch.setattr(updater, "check", lambda: None)
+    app._upd_checked = False
+    app._check_updates(manual=True)
+    assert pump(app, lambda: app.lbl_upd_status.cget("text") == "You have the newest version.")
+
+    def offline(): raise updater.UpdateError("Could not reach GitHub. Check the internet connection.")
+    monkeypatch.setattr(updater, "check", offline)
+    app._check_updates(manual=True)
+    assert pump(app, lambda: "Could not check" in app.lbl_upd_status.cget("text"))
