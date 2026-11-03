@@ -1,4 +1,4 @@
-"""Build PhotoCull-Setup.exe: one file a friend double-clicks to install PhotoCull.
+r"""Build PhotoCull-Setup.exe: one file a friend double-clicks to install PhotoCull.
 
 Run:  app\.venv\Scripts\python app\make_installer.py
 It packs the files of the last commit (nothing private: no photos, styles, settings or
@@ -76,7 +76,9 @@ def main() -> int:
     shutil.copy(INSTALL_BAT, build / "install.bat")
     exe = build / "PhotoCull-Setup.exe"
     sed = build / "photocull.sed"
-    sed.write_text(SED.format(target=exe, folder=build), encoding="ascii")
+    with open(sed, "w", encoding="ascii", newline="
+") as fh:      # IExpress wants CRLF
+        fh.write(SED.format(target=exe, folder=build))
     subprocess.run(["iexpress", "/N", "/Q", str(sed)], check=True)
     if not exe.is_file():
         print("IExpress did not produce the installer.")
