@@ -33,12 +33,13 @@ from ..split import distribute
 from ..state import peek
 from ..styles import list_styles, styles_dir
 from . import i18n
+from . import palette as P
 from .i18n import anchor, justify, mcol, px, side, sticky, t, tr_msg
 from .settings import (DEFAULTS, SettingsError, UserSettings, build_config, max_per_post,
                        preview_count)
 from .thumbs import LRU, ThumbLoader
 from .widgets import (FONT, GridItem, StatCard, StepCard, ThumbGrid, Tooltip, ask_choice,
-                      set_text_scale, theme)
+                      card as make_card, icon, set_text_scale)
 
 MODE_KEYS = {"portrait": "Portrait (studio)", "action": "Action (matches)"}
 
@@ -68,9 +69,8 @@ PS_TEXT = {
     "in_use": ("#2e8bd0", "Photoshop is being used by PhotoCull"),
 }
 LOG_KEEP_LINES = 1500
-NAV = {"home": ("⌂", "Home"), "review": ("▦", "Review photos"),
-       "settings": ("⚙", "Settings"), "activity": ("≡", "Activity"),
-       "updates": ("↻", "Updates")}
+NAV = {"home": "Home", "review": "Review photos", "settings": "Settings",
+       "activity": "Activity", "updates": "Updates"}
 TEXT_STEPS = (1.0, 1.15, 1.3, 1.5, 1.7)       # sizes the A- / A+ buttons step through
 MACHINE_KEYS = {"advanced_open", "last_update_check", "skipped_version", "main_folder", "cull_input", "edit_input", "split_input"}
 PREVIEW_H = 240
@@ -97,6 +97,7 @@ class App(ctk.CTk):
         i18n.set_lang(self.settings["language"])
         ctk.set_appearance_mode(self.settings["appearance"])
         ctk.set_default_color_theme("blue")
+        P.apply()
         self._text_scale = self._clean_scale(self.settings["text_scale"])
         ctk.set_widget_scaling(self._text_scale)
         set_text_scale(self._text_scale)
@@ -189,35 +190,34 @@ class App(ctk.CTk):
         ctk.CTkLabel(f, text=title, font=(FONT, 22, "bold"), anchor=anchor()).pack(fill="x")
         if subtitle:
             ctk.CTkLabel(f, text=subtitle, font=(FONT, 12), anchor=anchor(), justify=justify(),
-                         text_color=("gray35", "gray65"), wraplength=640).pack(fill="x")
+                         text_color=P.MUTED, wraplength=640).pack(fill="x")
         return f
 
     def _section(self, parent, title: str, number: int | None = None):
         """A titled card. Returns (card, body) - put the widgets in `body`."""
-        card = ctk.CTkFrame(parent, corner_radius=12)
+        card = make_card(parent)
         card.columnconfigure(0, weight=1)
         head = ctk.CTkFrame(card, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
+        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
         if number is not None:
             ctk.CTkLabel(head, text=str(number), width=26, height=26, corner_radius=13,
-                         fg_color=("#3B8ED0", "#1F6AA5"), text_color="white",
+                         fg_color=P.ACCENT_SOFT, text_color=P.ACCENT_TEXT,
                          font=(FONT, 13, "bold")).pack(side=side("left"), padx=px(0, 10))
         ctk.CTkLabel(head, text=title, font=(FONT, 15, "bold"), anchor=anchor()).pack(
             side=side("left"))
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 12))
+        body.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))
         card.head = head
         return card, body
 
     def _grey_button(self, parent, text: str, command, width: int = 140):
         return ctk.CTkButton(parent, text=text, width=width, height=30, command=command,
-                             fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"),
-                             text_color=("gray10", "gray95"))
+                             fg_color=P.NEUTRAL, hover_color=P.NEUTRAL_HOVER,
+                             text_color=P.TEXT, text_color_disabled=P.FAINT)
 
     # ---- sidebar
     def _nav_text(self, key: str) -> str:
-        icon, label = NAV[key]
-        text = f"{i18n.RLM}{icon}   {t(label)}" if i18n.is_ar() else f"  {icon}   {t(label)}"
+        text = t(NAV[key])
         if key == "review" and self.review and (self.review.selected or self.review.alternates):
             text += f"  ({len(self.review.selected)})"
         if key == "updates" and getattr(self, "_update_rel", None):
@@ -225,47 +225,56 @@ class App(ctk.CTk):
         return text
 
     def _build_sidebar(self):
-        f = ctk.CTkFrame(self, width=210, corner_radius=0, fg_color=("gray88", "gray14"))
+        f = ctk.CTkFrame(self, width=224, corner_radius=0, fg_color=P.SIDEBAR)
         f.grid_propagate(False)
         f.columnconfigure(0, weight=1)
-        f.rowconfigure(2 + len(NAV), weight=1)
-        ctk.CTkLabel(f, text="PhotoCull", font=(FONT, 22, "bold"), anchor=anchor()).grid(
-            row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
-        ctk.CTkLabel(f, text=f"v{__version__}", font=(FONT, 11), anchor=anchor(),
-                     text_color=("gray40", "gray60")).grid(
-            row=1, column=0, sticky="ew", padx=18, pady=(0, 14))
+        f.rowconfigure(1 + len(NAV), weight=1)
+        brand = ctk.CTkFrame(f, fg_color="transparent")
+        brand.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 18))
+        logo = icon("camera", P.WHITE, 20)
+        ctk.CTkLabel(brand, text="" if logo else "P", image=logo, width=38, height=38,
+                     corner_radius=10, fg_color=P.ACCENT, text_color="white",
+                     font=(FONT, 18, "bold")).pack(side=side("left"))
+        name = ctk.CTkFrame(brand, fg_color="transparent")
+        name.pack(side=side("left"), padx=10)
+        ctk.CTkLabel(name, text="PhotoCull", font=(FONT, 18, "bold"), height=22,
+                     anchor=anchor()).pack(fill="x")
+        ctk.CTkLabel(name, text=f"v{__version__}", font=(FONT, 11), height=14, anchor=anchor(),
+                     text_color=P.MUTED).pack(fill="x")
         self.nav_btns: dict[str, ctk.CTkButton] = {}
         for i, key in enumerate(NAV):
-            b = ctk.CTkButton(f, text=self._nav_text(key), anchor=anchor(), height=42,
-                              font=(FONT, 14), corner_radius=8,
+            b = ctk.CTkButton(f, text=self._nav_text(key), anchor=anchor(), height=40,
+                              font=(FONT, 14), corner_radius=10, compound=side("left"),
                               command=lambda k=key: self.show_page(k))
-            b.grid(row=2 + i, column=0, sticky="ew", padx=10, pady=2)
+            b.grid(row=1 + i, column=0, sticky="ew", padx=12, pady=2)
             self.nav_btns[key] = b
-        # bottom block: Photoshop status, theme, language
+        # bottom block: Photoshop status, theme, language, text size
         bottom = ctk.CTkFrame(f, fg_color="transparent")
-        bottom.grid(row=3 + len(NAV), column=0, sticky="ew", padx=14, pady=(0, 14))
-        bottom.columnconfigure(mcol(1, 2), weight=1)
-        self.ps_dot = ctk.CTkLabel(bottom, text="●", font=(FONT, 16), width=18)
-        self.ps_dot.grid(row=0, column=mcol(0, 2), sticky="n", pady=(2, 0))
-        self.ps_text = ctk.CTkLabel(bottom, text="", font=(FONT, 11), anchor=anchor(),
-                                    justify=justify(), wraplength=140)
-        self.ps_text.grid(row=0, column=mcol(1, 2), sticky="ew", padx=px(4, 0))
+        bottom.grid(row=2 + len(NAV), column=0, sticky="ew", padx=12, pady=(0, 14))
+        bottom.columnconfigure(0, weight=1)
+        ps = make_card(bottom, P.CARD2, 10)
+        ps.grid(row=0, column=0, sticky="ew")
+        ps.columnconfigure(mcol(1, 2), weight=1)
+        self.ps_dot = ctk.CTkLabel(ps, text="●", font=(FONT, 14), width=16)
+        self.ps_dot.grid(row=0, column=mcol(0, 2), sticky="n", padx=px(10, 0), pady=(8, 0))
+        self.ps_text = ctk.CTkLabel(ps, text="", font=(FONT, 11), anchor=anchor(),
+                                    justify=justify(), wraplength=140, text_color=P.MUTED)
+        self.ps_text.grid(row=0, column=mcol(1, 2), sticky="ew", padx=px(6, 10), pady=6)
         self.theme_switch = ctk.CTkSwitch(bottom, text=t("Dark"), width=70,
                                           command=self._toggle_theme)
         if self.settings["appearance"] == "dark":
             self.theme_switch.select()
-        self.theme_switch.grid(row=1, column=0, columnspan=2, sticky=sticky("w"), pady=(12, 8))
-        self.btn_lang = ctk.CTkButton(bottom, text="English" if i18n.is_ar() else "العربية",
-                                      width=90, height=30, command=self._toggle_language)
-        self.btn_lang.grid(row=2, column=0, columnspan=2, sticky=sticky("w"))
+        self.theme_switch.grid(row=1, column=0, sticky=sticky("w"), pady=(12, 10))
+        tools = ctk.CTkFrame(bottom, fg_color="transparent")
+        tools.grid(row=2, column=0, sticky="ew")
+        self.btn_lang = self._grey_button(tools, "English" if i18n.is_ar() else "العربية",
+                                          self._toggle_language, 86)
+        self.btn_lang.pack(side=side("left"))
         Tooltip(self.btn_lang, t("Switch the window between English and Arabic"))
-        size = ctk.CTkFrame(bottom, fg_color="transparent")
-        size.grid(row=3, column=0, columnspan=2, sticky=sticky("w"), pady=(10, 0))
-        for i, (text, delta, tip) in enumerate((("A−", -1, "Smaller text"),
-                                                 ("A+", 1, "Bigger text"))):
-            b = self._grey_button(size, text, lambda d=delta: self._change_text_size(d), 42)
-            b.configure(font=(FONT, 14, "bold"))
-            b.grid(row=0, column=mcol(i, 2), padx=px(0, 6))
+        for text, delta, tip in (("A−", -1, "Smaller text"), ("A+", 1, "Bigger text")):
+            b = self._grey_button(tools, text, lambda d=delta: self._change_text_size(d), 40)
+            b.configure(font=(FONT, 13, "bold"))
+            b.pack(side=side("left"), padx=px(6, 0))
             Tooltip(b, t(tip))
         return f
 
@@ -274,85 +283,84 @@ class App(ctk.CTk):
         self.pages[key].lift()
         for k, b in self.nav_btns.items():
             on = k == key
-            b.configure(fg_color=("#3B8ED0", "#1F6AA5") if on else "transparent",
-                        text_color="white" if on else ("gray10", "gray90"),
-                        hover_color=("#3B8ED0", "#1F6AA5") if on else ("gray78", "gray22"))
+            b.configure(fg_color=P.ACCENT_SOFT if on else "transparent",
+                        text_color=P.ACCENT_TEXT if on else P.TEXT,
+                        hover_color=P.ACCENT_SOFT if on else P.NEUTRAL,
+                        font=(FONT, 14, "bold" if on else "normal"),
+                        image=icon(k, P.ACCENT_TEXT if on else P.MUTED))
 
     # ---- page 1: Home
     def _build_home(self, parent):
         f = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        f.columnconfigure(0, weight=1)
+        f.columnconfigure((0, 1), weight=1, uniform="top")
 
-        # 1. folder
+        # 1. folder (one half of the top row)
         card, body = self._section(f, t("Coverage folder"), 1)
-        card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        body.columnconfigure(mcol(1, 2), weight=1)
-        self.btn_folder = ctk.CTkButton(body, text=t("Choose folder…"), width=150, height=34,
-                                        command=self._choose_folder)
-        self.btn_folder.grid(row=0, column=mcol(0, 2), padx=px(0, 12))
+        card.grid(row=0, column=mcol(0, 2), sticky="nsew", pady=(0, 10), padx=px(0, 5))
+        body.columnconfigure(0, weight=1)
+        self.btn_folder = ctk.CTkButton(body, text=t("Choose folder…"), width=160, height=38,
+                                        font=(FONT, 13, "bold"), image=icon("folder"),
+                                        compound=side("left"), command=self._choose_folder)
+        self.btn_folder.grid(row=0, column=0, sticky=sticky("w"))
         self.lbl_folder = ctk.CTkLabel(body, text=t("No folder chosen"), anchor=anchor(),
-                                       font=(FONT, 13), wraplength=620, justify=justify())
-        self.lbl_folder.grid(row=0, column=mcol(1, 2), sticky="ew")
+                                       font=(FONT, 13, "bold"), wraplength=360,
+                                       justify=justify())
+        self.lbl_folder.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         ctk.CTkLabel(body, text=t("Pick any folder that has your photos. They are never changed: the results are "
                                   "saved in a new folder next to it."),
-                     font=(FONT, 11), anchor=anchor(), justify=justify(), wraplength=760,
-                     text_color=("gray35", "gray65")).grid(row=1, column=0, columnspan=2,
-                                                           sticky="ew", pady=(6, 0))
+                     font=(FONT, 11), anchor=anchor(), justify=justify(), wraplength=360,
+                     text_color=P.MUTED).grid(row=2, column=0, sticky="ew", pady=(4, 0))
 
-        # 2. options
+        # 2. options (the other half)
         card, body = self._section(f, t("Options"), 2)
-        card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        c = 0
-        ctk.CTkLabel(body, text=t("Type of shoot"), font=(FONT, 12)).grid(
-            row=0, column=mcol(c, 5), sticky=sticky("w"), padx=px(0, 6))
-        c += 1
+        card.grid(row=0, column=mcol(1, 2), sticky="nsew", pady=(0, 10), padx=px(5, 0))
+        body.columnconfigure(mcol(1, 2), weight=1)
+        ctk.CTkButton(card.head, text=t("Open Styles folder"), width=120, height=24,
+                      font=(FONT, 11, "underline"), fg_color="transparent", hover=False,
+                      text_color=P.ACCENT_TEXT,
+                      command=self._open_styles).pack(side=side("right"))
+        for r, text in enumerate((t("Type of shoot"), t("Style"), t("Max images per post"))):
+            ctk.CTkLabel(body, text=text, font=(FONT, 12), text_color=P.MUTED,
+                         anchor=anchor()).grid(row=r, column=mcol(0, 2), sticky=sticky("w"),
+                                               padx=px(0, 14), pady=4)
         self.mode_menu = ctk.CTkOptionMenu(body, values=list(mode_labels().values()), width=170,
                                            command=self._on_mode)
         self.mode_menu.set(mode_labels()[self.settings["mode"]])
-        self.mode_menu.grid(row=0, column=mcol(c, 5), padx=px(0, 18))
+        self.mode_menu.grid(row=0, column=mcol(1, 2), sticky="ew", pady=4)
         Tooltip(self.mode_menu, t("Portrait: studio and class photos, eyes matter.\n"
                                   "Action: matches and events, sharpness matters most."))
-        c += 1
-        ctk.CTkLabel(body, text=t("Style"), font=(FONT, 12)).grid(
-            row=0, column=mcol(c, 5), sticky=sticky("w"), padx=px(0, 6))
-        c += 1
-        self.style_menu = ctk.CTkOptionMenu(body, values=[choose_style()], width=210,
+        self.style_menu = ctk.CTkOptionMenu(body, values=[choose_style()], width=170,
                                             command=lambda _v: self._on_setting())
-        self.style_menu.grid(row=0, column=mcol(c, 5), padx=px(0, 4))
-        c += 1
-        ctk.CTkButton(body, text=t("Open Styles folder"), width=120, height=22,
-                      font=(FONT, 11, "underline"), fg_color="transparent", hover=False,
-                      text_color=("#1a62b8", "#7ab7ff"),
-                      command=self._open_styles).grid(row=0, column=mcol(c, 5))
-        # second row
-        ctk.CTkLabel(body, text=t("Max images per post"), font=(FONT, 12)).grid(
-            row=1, column=mcol(0, 5), sticky=sticky("w"), padx=px(0, 6), pady=(12, 0))
+        self.style_menu.grid(row=1, column=mcol(1, 2), sticky="ew", pady=4)
         self.var_mpp = ctk.StringVar(value=str(self.settings["max_per_post"]
                                                or self.cfg_base.split.max_per_post))
-        ctk.CTkEntry(body, textvariable=self.var_mpp, width=60, justify="center").grid(
-            row=1, column=mcol(1, 5), sticky=sticky("w"), pady=(12, 0))
+        mpp = ctk.CTkFrame(body, fg_color="transparent")
+        mpp.grid(row=2, column=mcol(1, 2), sticky="ew", pady=4)
+        ctk.CTkEntry(mpp, textvariable=self.var_mpp, width=64, justify="center").pack(
+            side=side("left"))
         self.var_mpp.trace_add("write", lambda *_: self._on_setting())
         exp = self.settings["exposure"]
         self.var_exposure = ctk.BooleanVar(
             value=self.cfg_base.exposure_correction.enabled if exp is None else bool(exp))
-        cb = ctk.CTkCheckBox(body, text=t("Fix exposure"), variable=self.var_exposure,
+        cb = ctk.CTkCheckBox(mpp, text=t("Fix exposure"), variable=self.var_exposure,
                              command=self._on_setting)
-        cb.grid(row=1, column=0 if i18n.is_ar() else 2, columnspan=3, sticky=sticky("w"),
-                pady=(12, 0))
+        cb.pack(side=side("right"))
         Tooltip(cb, t("Brightens dark photos before Photoshop. ON for night matches, "
                       "OFF for studio."))
 
         # 3. run
         card, body = self._section(f, t("Run"), 3)
-        card.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        card.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         body.columnconfigure((0, 1, 2), weight=1, uniform="card")
-        self.btn_all = ctk.CTkButton(body, text=t("▶  Run All"), height=46,
-                                     font=(FONT, 19, "bold"), fg_color=("#2e8b57", "#2e8b57"),
-                                     hover_color=("#256f46", "#3aa66a"),
+        self.btn_all = ctk.CTkButton(body, text=t("▶  Run All"), height=50, corner_radius=12,
+                                     font=(FONT, 19, "bold"), fg_color=P.GO,
+                                     text_color_disabled=("#BFE8CF", "#9BD3AF"),
+                                     hover_color=P.GO_HOVER,
                                      command=lambda: self._start("all"))
         self.btn_all.grid(row=0, column=0, columnspan=3, sticky="ew", padx=4, pady=(0, 4))
         self.tip_all = Tooltip(self.btn_all)
-        self.lbl_predict = ctk.CTkLabel(body, text="", font=(FONT, 13, "bold"))
+        self.lbl_predict = ctk.CTkLabel(body, text="", font=(FONT, 13, "bold"),
+                                        text_color=P.MUTED)
         self.lbl_predict.grid(row=1, column=0, columnspan=3, pady=(0, 6))
         self.cards = {
             "cull": StepCard(body, t("1. Cull"), t("Pick the best photos"),
@@ -370,21 +378,21 @@ class App(ctk.CTk):
 
         # results summary
         card, body = self._section(f, t("Summary"))
-        card.grid(row=3, column=0, sticky="ew")
+        card.grid(row=2, column=0, columnspan=2, sticky="ew")
         for i in range(5):
             body.columnconfigure(i, weight=1, uniform="stat")
         self.card_total = StatCard(body, t("Photos"))
         self.card_groups = StatCard(body, t("Moments"))
-        self.card_selected = StatCard(body, t("Selected"))
+        self.card_selected = StatCard(body, t("Selected"), P.GO)
         self.card_alts = StatCard(body, t("Alternates"))
-        self.card_rejected = StatCard(body, t("Rejected"))
+        self.card_rejected = StatCard(body, t("Rejected"), P.BAD_TEXT)
         for i, sc in enumerate((self.card_total, self.card_groups, self.card_selected,
                                 self.card_alts, self.card_rejected)):
             sc.grid(row=0, column=mcol(i, 5), sticky="nsew", padx=4)
         self.btn_go_review = ctk.CTkButton(card.head, text=t("Review the picked photos →"), height=24,
                                            fg_color="transparent", hover=False,
                                            font=(FONT, 12, "underline"),
-                                           text_color=("#1a62b8", "#7ab7ff"),
+                                           text_color=P.ACCENT_TEXT,
                                            command=lambda: self.show_page("review"))
         self.btn_go_review.pack(side=side("right"))
         return f
@@ -396,50 +404,48 @@ class App(ctk.CTk):
         page.rowconfigure(1, weight=1)
         self._page_header(page, t("Review photos"),
                           t("Check what the program picked. You can swap any photo with "
-                            "another frame of the same moment.")).grid(
+                            "another frame of the same moment.") + "\n" +
+                          t("Click a photo to see why it was picked. Double-click opens it. "
+                            "Arrow keys move.")).grid(
             row=0, column=0, sticky="ew", pady=(0, 8))
-        f = ctk.CTkFrame(page, corner_radius=12)
+        f = make_card(page)
         f.grid(row=1, column=0, sticky="nsew")
         f.columnconfigure(0, weight=0)
         f.columnconfigure(mcol(0, 2), weight=1)
         f.rowconfigure(1, weight=1)
         top = ctk.CTkFrame(f, fg_color="transparent")
-        top.grid(row=0, column=mcol(0, 2), sticky="ew", padx=10, pady=(8, 2))
+        top.grid(row=0, column=mcol(0, 2), sticky="ew", padx=12, pady=(12, 6))
         self.seg = ctk.CTkSegmentedButton(top, values=[t("Selected"), t("Alternates")],
                                           command=self._on_view)
         self.seg.set(t("Selected"))
         self.seg.pack(side=side("left"))
-        ctk.CTkLabel(top, text=t("Click a photo to see why it was picked. Double-click opens it. "
-                                 "Arrow keys move."),
-                     font=(FONT, 11), text_color=("gray35", "gray65")).pack(side=side("left"),
-                                                                           padx=12)
         self.grid_view = ThumbGrid(f, self.loader, self.cache, self._on_select, self._open_item)
-        self.grid_view.grid(row=1, column=mcol(0, 2), sticky="nsew", padx=px(10, 4), pady=(0, 10))
+        self.grid_view.grid(row=1, column=mcol(0, 2), sticky="nsew", padx=px(10, 4), pady=(0, 12))
         self.detail = self._build_detail(f)
-        self.detail.grid(row=0, column=mcol(1, 2), rowspan=2, sticky="ns", padx=px(4, 10),
-                         pady=10)
+        self.detail.grid(row=0, column=mcol(1, 2), rowspan=2, sticky="ns", padx=px(4, 12),
+                         pady=12)
         return page
 
     def _build_detail(self, master):
-        f = ctk.CTkFrame(master, width=330, corner_radius=8)
+        f = make_card(master, P.CARD2, 12, width=330)
         f.grid_propagate(False)
         f.columnconfigure(0, weight=1)
-        self.preview = ctk.CTkLabel(f, text="", width=300, height=PREVIEW_H)
-        self.preview.grid(row=0, column=0, padx=10, pady=(8, 2))
+        self.preview = ctk.CTkLabel(f, text="", width=300, height=PREVIEW_H, text_color=P.MUTED)
+        self.preview.grid(row=0, column=0, padx=10, pady=(12, 4))
         self.lbl_name = ctk.CTkLabel(f, text=t("Select a photo"), font=(FONT, 13, "bold"),
                                      wraplength=300, justify=justify(), anchor=anchor())
         self.lbl_name.grid(row=1, column=0, sticky="ew", padx=12)
-        self.btn_a = ctk.CTkButton(f, text="", height=32, command=lambda: self._act("a"))
-        self.btn_b = ctk.CTkButton(f, text="", height=28, command=lambda: self._act("b"),
-                                   fg_color=("gray70", "gray30"),
-                                   hover_color=("gray60", "gray40"),
-                                   text_color=("gray10", "gray95"))
+        self.btn_a = ctk.CTkButton(f, text="", height=34, command=lambda: self._act("a"))
+        self.btn_b = ctk.CTkButton(f, text="", height=32, command=lambda: self._act("b"),
+                                   fg_color=P.NEUTRAL, hover_color=P.NEUTRAL_HOVER,
+                                   text_color=P.TEXT, text_color_disabled=P.FAINT)
         self.btn_a.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 3))
         self.btn_b.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 4))
         self.tip_a, self.tip_b = Tooltip(self.btn_a), Tooltip(self.btn_b)
         self.btn_a.grid_remove()
         self.btn_b.grid_remove()
         self.lbl_info = ctk.CTkLabel(f, text="", font=(FONT, 12), wraplength=300,
+                                     text_color=P.MUTED,
                                      justify=justify(), anchor="n" + anchor())
         self.lbl_info.grid(row=4, column=0, sticky="nsew", padx=12, pady=(0, 6))
         f.rowconfigure(4, weight=1)
@@ -455,7 +461,7 @@ class App(ctk.CTk):
         if placeholder and key != "preview":
             explain += "  ·  " + t("Normal value: {v}").format(v=placeholder)
         ctk.CTkLabel(text, text=explain, font=(FONT, 11), anchor=anchor(), justify=justify(),
-                     wraplength=520, text_color=("gray35", "gray65")).pack(fill="x")
+                     wraplength=520, text_color=P.MUTED).pack(fill="x")
         if var is None:
             var = ctk.StringVar(value=str(self.settings[key]))
             var.trace_add("write", lambda *_: self._on_setting())
@@ -510,7 +516,7 @@ class App(ctk.CTk):
                         command=self._on_setting, font=(FONT, 13, "bold")).pack(anchor=anchor())
         ctk.CTkLabel(row, text=t("If even the sharpest photo of a moment is blurry, leave the "
                                  "whole moment out."),
-                     font=(FONT, 11), text_color=("gray35", "gray65"), anchor=anchor(),
+                     font=(FONT, 11), text_color=P.MUTED, anchor=anchor(),
                      justify=justify(), wraplength=620).pack(fill="x", padx=(28, 28))
 
         body = section(t("Spotting weak photos"))
@@ -535,7 +541,7 @@ class App(ctk.CTk):
         body = section(t("Folders"))
         ctk.CTkLabel(body, text=t("Leave these empty to use the normal folders. Change them only "
                                   "to work on photos kept somewhere else."),
-                     font=(FONT, 11), text_color=("gray35", "gray65"), anchor=anchor(),
+                     font=(FONT, 11), text_color=P.MUTED, anchor=anchor(),
                      justify=justify(), wraplength=620).grid(row=0, column=0, columnspan=3,
                                                              sticky="ew")
         body.columnconfigure(1, weight=1)
@@ -585,7 +591,7 @@ class App(ctk.CTk):
         self._grey_button(head, t("Open logs folder"), lambda: _open_path(LOGS_DIR), 150).grid(
             row=0, column=mcol(2, 3), padx=4)
         self.log = ctk.CTkTextbox(page, font=("Consolas", 12), wrap="none", state="disabled",
-                                  corner_radius=12)
+                                  corner_radius=P.RADIUS)
         self.log.grid(row=1, column=0, sticky="nsew")
         self.log._textbox.tag_config("err", foreground="#ff7b72")
         return page
@@ -593,7 +599,7 @@ class App(ctk.CTk):
     # ---- updates: banner, page, background check and download
     def _build_banner(self, parent):
         """Slim bar above the pages: only visible when a newer version exists."""
-        f = ctk.CTkFrame(parent, corner_radius=10, fg_color=("#3B8ED0", "#1F6AA5"))
+        f = ctk.CTkFrame(parent, corner_radius=12, fg_color=P.ACCENT)
         self.lbl_banner = ctk.CTkLabel(f, text="", font=(FONT, 13, "bold"), text_color="white",
                                        anchor=anchor())
         self.lbl_banner.pack(side=side("left"), padx=14, pady=8)
@@ -602,7 +608,7 @@ class App(ctk.CTk):
                       command=self._dismiss_update).pack(side=side("right"), padx=(0, 8))
         self.btn_banner_update = ctk.CTkButton(f, text=t("Update now"), width=110, height=28,
                                                fg_color="white", hover_color=("gray90", "gray90"),
-                                               text_color=("#1F6AA5", "#1F6AA5"),
+                                               text_color=("#4338CA", "#4338CA"),
                                                command=self._start_update)
         self.btn_banner_update.pack(side=side("right"), padx=4)
         ctk.CTkButton(f, text=t("Details"), width=70, height=28, fg_color="transparent",
@@ -634,8 +640,8 @@ class App(ctk.CTk):
                                        command=lambda: self._check_updates(manual=True))
         self.btn_check.grid(row=0, column=mcol(0, 3), padx=px(0, 8))
         self.btn_update = ctk.CTkButton(bar, text=t("Update now"), width=130,
-                                        fg_color=("#2e8b57", "#2e8b57"),
-                                        hover_color=("#256f46", "#3aa66a"),
+                                        fg_color=P.GO,
+                                        hover_color=P.GO_HOVER,
                                         command=self._start_update)
         self.btn_update.grid(row=0, column=mcol(1, 3), padx=px(0, 8))
         self.btn_skip = self._grey_button(bar, t("Skip this version"), self._skip_update, 150)
@@ -824,28 +830,27 @@ class App(ctk.CTk):
 
     # ---- always-visible bottom bar
     def _build_footer(self):
-        f = ctk.CTkFrame(self, corner_radius=12)
+        f = make_card(self)
         f.columnconfigure(0, weight=1)
         row = ctk.CTkFrame(f, fg_color="transparent")
-        row.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+        row.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 2))
         row.columnconfigure(mcol(0, 2), weight=1)
-        self.progress = ctk.CTkProgressBar(row)
+        self.progress = ctk.CTkProgressBar(row, height=8)
         self.progress.set(0)
         self.progress.grid(row=0, column=mcol(0, 2), sticky="ew", padx=px(0, 10))
         self.btn_stop = ctk.CTkButton(row, text=t("Stop"), width=90, height=30,
-                                      fg_color=("#c0392b", "#a93226"),
-                                      hover_color=("#a93226", "#c0392b"),
+                                      fg_color=P.DANGER, hover_color=P.DANGER_HOVER,
                                       command=self._stop, state="disabled")
         self.btn_stop.grid(row=0, column=mcol(1, 2))
         line = ctk.CTkFrame(f, fg_color="transparent")
-        line.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        line.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
         line.columnconfigure(mcol(0, 2), weight=1)
         self.lbl_progress = ctk.CTkLabel(line, text=t("Ready."), anchor=anchor(),
                                          font=(FONT, 12), justify=justify(), wraplength=900)
         self.lbl_progress.grid(row=0, column=mcol(0, 2), sticky="ew")
         ctk.CTkButton(line, text=t("Details ›"), width=70, height=22, fg_color="transparent",
                       hover=False, font=(FONT, 12, "underline"),
-                      text_color=("#1a62b8", "#7ab7ff"),
+                      text_color=P.ACCENT_TEXT,
                       command=lambda: self.show_page("activity")).grid(row=0, column=mcol(1, 2))
         return f
 
@@ -1538,7 +1543,7 @@ class App(ctk.CTk):
             self._set_ps("in_use", "")
         self.progress.configure(mode="indeterminate")
         self.progress.start()
-        self.lbl_progress.configure(text=self._starting_text(kind), text_color=("gray10", "gray90"))
+        self.lbl_progress.configure(text=self._starting_text(kind), text_color=P.TEXT)
         self._append_log(f"--- {t('Run All') if kind == 'all' else t(STEP_TITLES[kind])} ---")
         self._refresh_cards()
         self._update_buttons()
@@ -1620,7 +1625,7 @@ class App(ctk.CTk):
             if self.run_kind == "all" and self.cur_step else ""
         text = f"{step}{min(done + (1 if name else 0), total)} / {total}" if total else step + "…"
         self.lbl_progress.configure(text=f"{text}   {name}".rstrip(),
-                                    text_color=("gray10", "gray90"))
+                                    text_color=P.TEXT)
 
     def _on_step(self, step: str, what: str, res: StepResult | None) -> None:
         if what == "running":

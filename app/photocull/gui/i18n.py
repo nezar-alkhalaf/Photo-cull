@@ -63,7 +63,8 @@ def mcol(i: int, n: int) -> int:
 def _rtl(text: str) -> str:
     """Mark Arabic text so it reads right-to-left; a full stop at the end of a line gets a
     mark after it too, otherwise it is drawn at the start of the sentence."""
-    return RLM + "\n".join(ln + RLM if ln.endswith(".") else ln for ln in text.split("\n"))
+    return RLM + "\n".join(ln + RLM if ln.endswith((".", "…")) else ln
+                           for ln in text.split("\n"))
 
 
 def t(text: str) -> str:

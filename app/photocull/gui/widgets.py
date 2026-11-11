@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
-from PIL import ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+from . import palette as P
 from .i18n import anchor, is_ar, justify, mcol, px, side, sticky, t
 from .thumbs import LRU, ThumbLoader, file_key
 
@@ -34,6 +35,40 @@ BADGE_COLORS = {
     "warn": (("#8a5a00", "#fdecc8"), ("#ffd27a", "#4d3a0a")),
     "error": (("#9b1c1c", "#fbdada"), ("#ff9b9b", "#5a1c1c")),
 }
+
+
+ICON_FONTS = ("segmdl2.ttf", "SegoeIcons.ttf")     # Windows icon fonts; no icons without them
+ICONS = {"home": "\uE80F", "review": "\uE8B9", "settings": "\uE713", "activity": "\uE81C",
+         "updates": "\uE895", "camera": "\uE722", "folder": "\uE8B7", "play": "\uE768"}
+_icon_cache: dict = {}
+
+
+def icon(name: str, colors=P.WHITE, size: int = 18):
+    """A small line icon as a CTkImage in the given (light, dark) colours, or None."""
+    key = (name, tuple(colors), size)
+    if key not in _icon_cache:
+        font = None
+        for file in ICON_FONTS:
+            try:
+                font = ImageFont.truetype(file, 64)
+                break
+            except OSError:
+                continue
+
+        def draw(color):
+            im = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
+            ImageDraw.Draw(im).text((40, 40), ICONS[name], font=font, fill=color, anchor="mm")
+            return im
+
+        _icon_cache[key] = font and ctk.CTkImage(draw(colors[0]), draw(colors[1]),
+                                                 size=(size, size))
+    return _icon_cache[key]
+
+
+def card(master, color=P.CARD, radius: int = P.RADIUS, **kw) -> ctk.CTkFrame:
+    """A rounded panel with a hairline border."""
+    return ctk.CTkFrame(master, corner_radius=radius, fg_color=color, border_width=1,
+                        border_color=P.BORDER, **kw)
 
 
 def mode_index() -> int:
@@ -87,7 +122,7 @@ class Tooltip:
         y = self.widget.winfo_pointery() + 18
         tip.wm_geometry(f"+{x}+{y}")
         tk.Label(tip, text=self.text, justify=justify(), wraplength=int(320 * TEXT_SCALE), padx=8, pady=5,
-                 bg="#2b2b2b", fg="#f2f2f2", relief="solid", bd=1,
+                 bg="#1F2430", fg="#F3F4F6", relief="flat", bd=0,
                  font=(FONT, pt(10))).pack()
         self._tip = tip
 
@@ -95,14 +130,17 @@ class Tooltip:
 class StatCard(ctk.CTkFrame):
     """A number with a caption and an optional small second line."""
 
-    def __init__(self, master, title: str):
-        super().__init__(master, corner_radius=10)
-        self.value = ctk.CTkLabel(self, text="–", font=(FONT, 22, "bold"), height=28)
-        self.value.pack(padx=14, pady=(4, 0))
-        ctk.CTkLabel(self, text=title, font=(FONT, 12), height=16).pack(padx=14)
+    def __init__(self, master, title: str, color=P.TEXT):
+        super().__init__(master, corner_radius=12, fg_color=P.CARD2, border_width=1,
+                         border_color=P.BORDER)
+        self.value = ctk.CTkLabel(self, text="–", font=(FONT, 24, "bold"), height=30,
+                                  text_color=color)
+        self.value.pack(padx=14, pady=(8, 0))
+        ctk.CTkLabel(self, text=title, font=(FONT, 12), height=16,
+                     text_color=P.MUTED).pack(padx=14)
         self.sub = ctk.CTkLabel(self, text=" ", font=(FONT, 10), height=14,
-                                text_color=("gray35", "gray65"))
-        self.sub.pack(padx=14, pady=(0, 4))
+                                text_color=P.MUTED)
+        self.sub.pack(padx=14, pady=(0, 6))
 
     def set(self, value, sub: str = " ") -> None:
         self.value.configure(text=str(value))
@@ -114,28 +152,31 @@ class StepCard(ctk.CTkFrame):
 
     def __init__(self, master, title: str, button_text: str, description: str,
                  on_run: Callable[[], None], on_open: Callable[[], None]):
-        super().__init__(master, corner_radius=12)
+        super().__init__(master, corner_radius=12, fg_color=P.CARD2, border_width=1,
+                         border_color=P.BORDER)
         self.columnconfigure(0, weight=1)
         top = ctk.CTkFrame(self, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=14, pady=(6, 0))
+        top.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 0))
         top.columnconfigure(mcol(0, 2), weight=1)
         ctk.CTkLabel(top, text=title, font=(FONT, 15, "bold"), anchor=anchor()).grid(
             row=0, column=mcol(0, 2), sticky=sticky("w"))
         self.badge = ctk.CTkLabel(top, text=t("Not started"), font=(FONT, 11, "bold"),
                                   corner_radius=8, height=24)
         self.badge.grid(row=0, column=mcol(1, 2), sticky=sticky("e"))
-        self.button = ctk.CTkButton(self, text=button_text, height=36, font=(FONT, 14, "bold"),
+        self.button = ctk.CTkButton(self, text=button_text, height=38, font=(FONT, 14, "bold"),
+                                    fg_color=P.ACCENT_SOFT, hover_color=P.ACCENT_SOFT_HOVER,
+                                    text_color=P.ACCENT_TEXT, text_color_disabled=P.FAINT,
                                     command=on_run)
         self.button.grid(row=1, column=0, sticky="ew", padx=14, pady=(6, 2))
         self.desc = ctk.CTkLabel(self, text=description, font=(FONT, 11), anchor=anchor(),
-                                 justify=justify(), wraplength=250,
-                                 text_color=("gray30", "gray70"))
+                                 justify=justify(), wraplength=215,
+                                 text_color=P.MUTED)
         self.desc.grid(row=2, column=0, sticky="ew", padx=14)
         self.link = ctk.CTkButton(self, text=t("Open folder"), width=90, height=22,
                                   font=(FONT, 11, "underline"), fg_color="transparent",
-                                  hover=False, text_color=("#1a62b8", "#7ab7ff"),
-                                  command=on_open)
-        self.link.grid(row=3, column=0, sticky=sticky("w"), padx=10, pady=(0, 4))
+                                  hover=False, text_color=P.ACCENT_TEXT,
+                                  text_color_disabled=P.FAINT, command=on_open)
+        self.link.grid(row=3, column=0, sticky=sticky("w"), padx=10, pady=(0, 6))
         self.tip = Tooltip(self.button)
         self.link_tip = Tooltip(self.link)
         self.set_status(t("Not started"), "idle")
@@ -274,12 +315,12 @@ class ThumbGrid(ctk.CTkFrame):
         c.delete("all")
         _, ch, th = self._metrics()
         cw = self._cell_w()
-        card = theme("CTkFrame", "fg_color")
-        bg = pick(("gray90", "gray13"))
+        card = pick(P.CARD2)
+        bg = pick(P.CARD)
         c.configure(bg=bg)
         if not self.items:
             c.create_text(c.winfo_width() / 2, 60, text=self.empty_text,
-                          fill=pick(("gray40", "gray60")), font=(FONT, pt(12)))
+                          fill=pick(P.MUTED), font=(FONT, pt(12)))
             return
         top = c.canvasy(0)
         first_row = max(0, int(top // ch))
@@ -302,7 +343,7 @@ class ThumbGrid(ctk.CTkFrame):
         pad = int(4 * s)
         sel = item.key == self.selected_key
         c.create_rectangle(x + pad, y + pad, x + cw - pad, y + ch - pad, fill=card,
-                           outline=pick(("#1a62b8", "#4aa3ff")) if sel else card,
+                           outline=pick(P.ACCENT) if sel else pick(P.BORDER),
                            width=3 if sel else 1)
         cx, cy = x + cw // 2, y + pad + int(6 * s) + th // 2
         key = file_key(item.path, th)
@@ -314,7 +355,7 @@ class ThumbGrid(ctk.CTkFrame):
             if key not in self._pending:
                 self._pending[key] = self.loader.submit(item.path, th)
         c.create_text(cx, y + ch - int(22 * s), text=_shorten(item.caption, 24),
-                      fill=pick(("gray15", "gray85")), font=(FONT, pt(9)))
+                      fill=pick(P.TEXT), font=(FONT, pt(9)))
         if item.badge:
             light, dark = BADGE_COLORS[item.badge_kind]
             col = (light, dark)[mode_index()]
@@ -434,8 +475,8 @@ def ask_choice(parent, title: str, message: str, options: list[tuple[str, str]],
         ctk.CTkButton(row, text=label, command=lambda v=value: choose(v), height=34).pack(
             side=side("left"), padx=5)
     ctk.CTkButton(row, text=cancel_label or t("Cancel"), command=lambda: choose(None), height=34,
-                  fg_color=("gray70", "gray30"), hover_color=("gray60", "gray40"),
-                  text_color=("gray10", "gray95")).pack(side=side("left"), padx=5)
+                  fg_color=P.NEUTRAL, hover_color=P.NEUTRAL_HOVER,
+                  text_color=P.TEXT).pack(side=side("left"), padx=5)
     dlg.protocol("WM_DELETE_WINDOW", lambda: choose(None))
     dlg.update_idletasks()
     x = parent.winfo_rootx() + (parent.winfo_width() - dlg.winfo_reqwidth()) // 2
