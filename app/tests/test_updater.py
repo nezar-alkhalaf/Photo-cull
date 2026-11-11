@@ -39,14 +39,14 @@ def test_release_without_installer_or_from_an_untrusted_host_is_ignored():
 
 def test_check_returns_only_newer_releases(monkeypatch):
     import io
-    data = {"v": release_json("v0.3.0")}
+    data = {"v": release_json("v99.0.0")}
 
     class Resp(io.BytesIO):
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
     monkeypatch.setattr(updater, "_open", lambda url, timeout: Resp(json.dumps(data["v"]).encode()))
-    assert updater.check().version == "0.3.0"
+    assert updater.check().version == "99.0.0"
     data["v"] = release_json("v0.0.1")
     assert updater.check() is None
 
