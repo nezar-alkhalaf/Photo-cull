@@ -122,7 +122,7 @@ class StepCard(ctk.CTkFrame):
         ctk.CTkLabel(top, text=title, font=(FONT, 15, "bold"), anchor=anchor()).grid(
             row=0, column=mcol(0, 2), sticky=sticky("w"))
         self.badge = ctk.CTkLabel(top, text=t("Not started"), font=(FONT, 11, "bold"),
-                                  corner_radius=8, width=96, height=24)
+                                  corner_radius=8, height=24)
         self.badge.grid(row=0, column=mcol(1, 2), sticky=sticky("e"))
         self.button = ctk.CTkButton(self, text=button_text, height=36, font=(FONT, 14, "bold"),
                                     command=on_run)
@@ -180,6 +180,7 @@ class ThumbGrid(ctk.CTkFrame):
         self._pending: dict[tuple, object] = {}
         self._paint_job = None
         self._poll_job = None
+        self._view = None
         self.columnconfigure(0, weight=0)
         self.rowconfigure(0, weight=1)
         self.canvas = tk.Canvas(self, highlightthickness=0, bd=0)
@@ -192,8 +193,11 @@ class ThumbGrid(ctk.CTkFrame):
         self.canvas.bind("<Configure>", lambda e: self._relayout())
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Double-Button-1>", self._double)
-        self.canvas.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._wheel))
-        self.canvas.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
+        # On the canvas only: bind_all / unbind_all would switch off the wheel on the other pages.
+        self.canvas.bind("<MouseWheel>", self._wheel)
+        for key, step in (("<Left>", -1), ("<Right>", 1), ("<Up>", "up"), ("<Down>", "down")):
+            self.canvas.bind(key, lambda e, s=step: self._key_move(s))
+        self.canvas.bind("<Return>", lambda e: self._open_selected())
         self.empty_text = t("Nothing here yet.")
         self._scale = 1.0
         self._cols = 1
@@ -232,7 +236,7 @@ class ThumbGrid(ctk.CTkFrame):
 
     def _relayout(self, reset_scroll: bool = False) -> None:
         cw, ch, _ = self._metrics()
-        width = max(self.canvas.winfo_width(), cw)
+        width = self._width()
         self._cols = max(1, width // cw)
         rows = -(-len(self.items) // self._cols)
         self.canvas.configure(scrollregion=(0, 0, width, max(rows * ch, 1)))
@@ -244,7 +248,15 @@ class ThumbGrid(ctk.CTkFrame):
         """Width of the drawing area (the right edge is where Arabic cells start)."""
         return max(self.canvas.winfo_width(), self._metrics()[0])
 
+    def _cell_w(self) -> int:
+        """Cells share the whole width, so no empty strip is left beside the last column."""
+        return self._width() // self._cols
+
     def _on_yscroll(self, lo, hi) -> None:
+        # Tk also calls this after every repaint: without the check, painting never stops.
+        if (lo, hi) == self._view:
+            return
+        self._view = (lo, hi)
         self.scroll.set(lo, hi)
         self._schedule_paint()
 
@@ -260,7 +272,8 @@ class ThumbGrid(ctk.CTkFrame):
         self._paint_job = None
         c = self.canvas
         c.delete("all")
-        cw, ch, th = self._metrics()
+        _, ch, th = self._metrics()
+        cw = self._cell_w()
         card = theme("CTkFrame", "fg_color")
         bg = pick(("gray90", "gray13"))
         c.configure(bg=bg)
@@ -329,7 +342,7 @@ class ThumbGrid(ctk.CTkFrame):
 
     # ---- mouse
     def _index_at(self, e) -> int | None:
-        cw, ch, _ = self._metrics()
+        cw, ch = self._cell_w(), self._metrics()[1]
         cx = self.canvas.canvasx(e.x)
         col = int((self._width() - cx) // cw) if is_ar() else int(cx // cw)
         row = int(self.canvas.canvasy(e.y) // ch)
@@ -339,9 +352,44 @@ class ThumbGrid(ctk.CTkFrame):
         return i if i < len(self.items) else None
 
     def _click(self, e) -> None:
+        self.canvas.focus_set()                          # so the arrow keys work
         i = self._index_at(e)
         if i is not None:
             self.select(self.items[i].key)
+
+    # ---- keyboard
+    def _key_move(self, step) -> None:
+        """Arrow keys: step is -1 / 1 (previous / next photo) or "up" / "down" (one row)."""
+        if not self.items:
+            return
+        keys = [i.key for i in self.items]
+        if self.selected_key not in keys:
+            i = 0
+        else:
+            if step in ("up", "down"):
+                delta = -self._cols if step == "up" else self._cols
+            else:
+                delta = -step if is_ar() else step       # the grid fills from the right in Arabic
+            i = keys.index(self.selected_key) + delta
+            if not 0 <= i < len(keys):
+                return
+        self.select(keys[i])
+        self._see(i)
+
+    def _see(self, i: int) -> None:
+        """Scroll just enough to show cell i."""
+        ch = self._metrics()[1]
+        total = max(-(-len(self.items) // self._cols) * ch, 1)
+        top, bottom = (i // self._cols) * ch, (i // self._cols + 1) * ch
+        if top < self.canvas.canvasy(0):
+            self.canvas.yview_moveto(top / total)
+        elif bottom > self.canvas.canvasy(0) + self.canvas.winfo_height():
+            self.canvas.yview_moveto((bottom - self.canvas.winfo_height()) / total)
+
+    def _open_selected(self) -> None:
+        item = self.selected()
+        if item and self.on_open:
+            self.on_open(item)
 
     def _double(self, e) -> None:
         i = self._index_at(e)

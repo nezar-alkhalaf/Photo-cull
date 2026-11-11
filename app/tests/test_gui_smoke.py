@@ -55,6 +55,16 @@ def pump(win, cond, seconds=8):
     return False
 
 
+def test_idle_grid_does_not_keep_repainting(app, monkeypatch):
+    grid = app.grid_view
+    pump(app, lambda: False, seconds=0.5)            # let the first paint finish
+    paints = []
+    real = grid._paint
+    monkeypatch.setattr(grid, "_paint", lambda: (paints.append(1), real()))
+    pump(app, lambda: False, seconds=1.5)
+    assert len(paints) <= 1
+
+
 def make_coverage(tmp_path) -> CoverageLayout:
     lay = CoverageLayout.for_main(tmp_path / "تغطية")
     lay.full_coverage.mkdir(parents=True)
@@ -328,3 +338,34 @@ def test_manual_check_with_no_newer_version_and_offline(app, monkeypatch):
     monkeypatch.setattr(updater, "check", offline)
     app._check_updates(manual=True)
     assert pump(app, lambda: "Could not check" in app.lbl_upd_status.cget("text"))
+
+
+def test_mouse_wheel_still_scrolls_other_pages_after_hovering_the_grid(app):
+    assert app.bind_all("<MouseWheel>")               # the scrolling pages listen for the wheel
+    app.grid_view.canvas.event_generate("<Enter>")
+    app.update()
+    app.grid_view.canvas.event_generate("<Leave>")
+    app.update()
+    assert app.bind_all("<MouseWheel>")
+
+
+def test_arrow_keys_move_the_selection_in_the_grid(app, tmp_path):
+    lay = make_coverage(tmp_path)
+    assert run_cull(lay, Config(), "portrait", detector=FakeDetector()).ok
+    app._set_folder(lay.main, ask_create=False)
+    assert pump(app, lambda: len(app.grid_view.items) == 2)
+    grid = app.grid_view
+    grid._key_move(1)                                  # nothing selected yet: start at the first
+    assert grid.selected_key == grid.items[0].key
+    grid._key_move(1)
+    assert grid.selected_key == grid.items[1].key
+    grid._key_move(1)                                  # already at the end
+    assert grid.selected_key == grid.items[1].key
+    grid._key_move(-1)
+    assert grid.selected_key == grid.items[0].key
+    assert app._detail_item is not None
+
+
+def test_stop_button_only_shows_while_a_step_runs(app):
+    app.update()
+    assert app.btn_stop.winfo_manager() == ""

@@ -44,6 +44,22 @@ DEFAULTS: dict = {
 }
 
 
+CHOICES = {"mode": ("portrait", "action"), "appearance": ("light", "dark")}
+
+
+def _clean(key: str, value):
+    """The value, or the default when its kind is wrong (a hand-edited or imported file)."""
+    default = DEFAULTS[key]
+    if key in CHOICES:
+        return value if value in CHOICES[key] else default
+    number = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, str):
+        return str(value) if number else value if isinstance(value, str) else default
+    if isinstance(default, float):
+        return value if number else default
+    return value
+
+
 class SettingsError(ValueError):
     """A setting the user typed is not usable; the message says which and why."""
 
@@ -55,7 +71,7 @@ class UserSettings:
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
-                self.data.update({k: v for k, v in loaded.items() if k in DEFAULTS})
+                self.data.update({k: _clean(k, v) for k, v in loaded.items() if k in DEFAULTS})
         except (OSError, ValueError):
             pass                                  # missing or damaged: start from defaults
 
@@ -65,7 +81,7 @@ class UserSettings:
     def __setitem__(self, key: str, value) -> None:
         if key not in DEFAULTS:
             raise KeyError(key)
-        self.data[key] = value
+        self.data[key] = _clean(key, value)
 
     def save(self) -> None:
         try:

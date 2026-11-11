@@ -82,3 +82,15 @@ def test_thumbnail_is_small_and_changes_key_when_file_changes(tmp_path):
     k1 = file_key(p, 160)
     p.write_bytes(p.read_bytes() + b"\0")
     assert file_key(p, 160) != k1                                    # edited in place -> new key
+
+
+def test_damaged_values_in_the_settings_file_fall_back_to_defaults(tmp_path):
+    p = tmp_path / "settings.json"
+    p.write_text('{"mode": "x", "appearance": 7, "main_folder": 5, "max_per_post": 15, '
+                 '"last_update_check": "soon", "language": "ar"}', encoding="utf-8")
+    s = UserSettings(p)
+    assert s["mode"] == "portrait" and s["appearance"] == "dark"
+    assert s["main_folder"] == "5" and s["max_per_post"] == "15"     # numbers become text
+    assert s["last_update_check"] == 0.0 and s["language"] == "ar"
+    s["mode"] = "nonsense"
+    assert s["mode"] == "portrait"

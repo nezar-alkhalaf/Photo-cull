@@ -60,9 +60,15 @@ def mcol(i: int, n: int) -> int:
     return n - 1 - i if LANG == "ar" else i
 
 
+def _rtl(text: str) -> str:
+    """Mark Arabic text so it reads right-to-left; a full stop at the end of a line gets a
+    mark after it too, otherwise it is drawn at the start of the sentence."""
+    return RLM + "\n".join(ln + RLM if ln.endswith(".") else ln for ln in text.split("\n"))
+
+
 def t(text: str) -> str:
     if LANG == "ar" and text in AR:
-        return RLM + AR[text]
+        return _rtl(AR[text])
     return text
 
 
@@ -199,8 +205,8 @@ AR: dict[str, str] = {
     # ---- review area
     "Selected ({n})": "المختارة ({n})",
     "Alternates ({n})": "البدائل ({n})",
-    "Click a photo to see why it was picked. Double-click opens it.":
-        "اضغط على صورة تشوف ليش انختارت. ضغطتين تفتحها.",
+    "Click a photo to see why it was picked. Double-click opens it. Arrow keys move.":
+        "اضغط على صورة تشوف ليش انختارت. ضغطتين تفتحها. الأسهم تنقلك.",
     "your pick": "اختيارك",
     "check me": "راجعني",
     "No photos here yet. Run step 1 (Cull).": "ما فيه صور هنا. شغّل الخطوة 1 (الاختيار).",
@@ -490,4 +496,4 @@ def tr_msg(text: str) -> str:
     out = text
     for pat, repl in _MSG:
         out = pat.sub(repl, out)
-    return RLM + out if out != text else text
+    return _rtl(out) if out != text else text

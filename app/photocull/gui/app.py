@@ -73,7 +73,7 @@ NAV = {"home": ("⌂", "Home"), "review": ("▦", "Review photos"),
        "updates": ("↻", "Updates")}
 TEXT_STEPS = (1.0, 1.15, 1.3, 1.5, 1.7)       # sizes the A- / A+ buttons step through
 MACHINE_KEYS = {"advanced_open", "last_update_check", "skipped_version", "main_folder", "cull_input", "edit_input", "split_input"}
-PREVIEW_H = 150
+PREVIEW_H = 240
 
 
 def _count(folder: Path | None) -> int:
@@ -206,6 +206,7 @@ class App(ctk.CTk):
             side=side("left"))
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 12))
+        card.head = head
         return card, body
 
     def _grey_button(self, parent, text: str, command, width: int = 140):
@@ -380,12 +381,12 @@ class App(ctk.CTk):
         for i, sc in enumerate((self.card_total, self.card_groups, self.card_selected,
                                 self.card_alts, self.card_rejected)):
             sc.grid(row=0, column=mcol(i, 5), sticky="nsew", padx=4)
-        self.btn_go_review = ctk.CTkButton(body, text=t("Review the picked photos →"), height=30,
+        self.btn_go_review = ctk.CTkButton(card.head, text=t("Review the picked photos →"), height=24,
                                            fg_color="transparent", hover=False,
                                            font=(FONT, 12, "underline"),
                                            text_color=("#1a62b8", "#7ab7ff"),
                                            command=lambda: self.show_page("review"))
-        self.btn_go_review.grid(row=1, column=0, columnspan=5, pady=(6, 0))
+        self.btn_go_review.pack(side=side("right"))
         return f
 
     # ---- page 2: Review photos
@@ -408,7 +409,8 @@ class App(ctk.CTk):
                                           command=self._on_view)
         self.seg.set(t("Selected"))
         self.seg.pack(side=side("left"))
-        ctk.CTkLabel(top, text=t("Click a photo to see why it was picked. Double-click opens it."),
+        ctk.CTkLabel(top, text=t("Click a photo to see why it was picked. Double-click opens it. "
+                                 "Arrow keys move."),
                      font=(FONT, 11), text_color=("gray35", "gray65")).pack(side=side("left"),
                                                                            padx=12)
         self.grid_view = ThumbGrid(f, self.loader, self.cache, self._on_select, self._open_item)
@@ -653,7 +655,7 @@ class App(ctk.CTk):
         card.rowconfigure(1, weight=1)
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
-        card.grid_rowconfigure(1, weight=1)
+        body.grid_configure(sticky="nsew")
         self.upd_notes = ctk.CTkTextbox(body, font=(FONT, 12), wrap="word", state="disabled",
                                         height=160)
         self.upd_notes.grid(row=0, column=0, sticky="nsew")
@@ -1250,6 +1252,10 @@ class App(ctk.CTk):
         self.tip_all.text = why
         self.btn_folder.configure(state="disabled" if running else "normal")
         self.btn_stop.configure(state="normal" if running else "disabled")
+        if running:
+            self.btn_stop.grid()
+        else:
+            self.btn_stop.grid_remove()                  # nothing to stop: keep the bar calm
         self._sync_detail_buttons()
 
     # ================================================================== review grid

@@ -59,7 +59,7 @@ def test_core_messages_are_translated_when_arabic_and_untouched_in_english():
     out = i18n.tr_msg(msg)
     assert "10" in out and "12" in out and "photos" not in out
     assert i18n.tr_msg("Some message nobody translated") == "Some message nobody translated"
-    assert i18n.tr_msg("Edited 5 of 5 with Warm.") .endswith("Warm.")
+    assert i18n.tr_msg("Edited 5 of 5 with Warm.").rstrip(i18n.RLM).endswith("Warm.")
 
 
 def test_settings_remember_the_language(tmp_path):
@@ -80,3 +80,9 @@ def test_layout_helpers_mirror_only_in_arabic():
     assert i18n.sticky("nsw") == "nse" and i18n.sticky("ew") == "we" and i18n.sticky("n") == "n"
     assert i18n.px(1, 9) == (9, 1)
     assert [i18n.mcol(i, 3) for i in range(3)] == [2, 1, 0]
+
+
+def test_arabic_sentences_keep_their_full_stop_at_the_end():
+    i18n.set_lang("ar")
+    assert i18n.t("Ready.").endswith("." + i18n.RLM)
+    assert not i18n.t("Stop").endswith(i18n.RLM)
